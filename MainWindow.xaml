@@ -1,0 +1,212 @@
+<Window x:Class="HardwareWidget.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Hardware Monitor Widget"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="Manual"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown"
+        Deactivated="Window_Deactivated"
+        Loaded="Window_Loaded"
+        Closing="Window_Closing"
+        Closed="Window_Closed">
+
+    <Window.ContextMenu>
+        <ContextMenu x:Name="WidgetContextMenu" MinWidth="230">
+            <!-- Check / Switch de Modo Minimalista -->
+            <MenuItem x:Name="MinimalistMenuItem"
+                      Header="✨ Modo Minimalista (Solo Temp)"
+                      IsCheckable="True"
+                      IsChecked="False"
+                      StaysOpenOnClick="True"
+                      Click="MinimalistMenuItem_Click"/>
+
+            <Separator/>
+
+            <!-- Orientación: Vertical u Horizontal -->
+            <MenuItem Header="📐 Disposición">
+                <MenuItem x:Name="VerticalLayoutMenuItem"
+                          Header="↕️ Vertical (Arriba / Abajo)"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          Click="VerticalLayout_Click"/>
+                <MenuItem x:Name="HorizontalLayoutMenuItem"
+                          Header="↔️ Horizontal (Lado a lado)"
+                          IsCheckable="True"
+                          IsChecked="False"
+                          Click="HorizontalLayout_Click"/>
+            </MenuItem>
+
+            <Separator/>
+
+            <!-- Slider de Opacidad -->
+            <MenuItem StaysOpenOnClick="True">
+                <MenuItem.Header>
+                    <StackPanel Width="190" Margin="0,2">
+                        <Grid Margin="0,0,0,4">
+                            <TextBlock Text="🔆 Opacidad" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="OpacityValueText" Text="90%" HorizontalAlignment="Right" Foreground="#666"/>
+                        </Grid>
+                        <Slider x:Name="OpacitySlider"
+                                Minimum="0.15"
+                                Maximum="1.0"
+                                Value="0.90"
+                                TickFrequency="0.05"
+                                ValueChanged="OpacitySlider_ValueChanged"/>
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+
+            <!-- Slider de Tamaño -->
+            <MenuItem StaysOpenOnClick="True">
+                <MenuItem.Header>
+                    <StackPanel Width="190" Margin="0,2">
+                        <Grid Margin="0,0,0,4">
+                            <TextBlock Text="🔍 Tamaño del Widget" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="ScaleValueText" Text="100%" HorizontalAlignment="Right" Foreground="#666"/>
+                        </Grid>
+                        <Slider x:Name="ScaleSlider"
+                                Minimum="0.50"
+                                Maximum="2.0"
+                                Value="1.0"
+                                TickFrequency="0.05"
+                                ValueChanged="ScaleSlider_ValueChanged"/>
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+
+            <Separator/>
+
+            <MenuItem x:Name="TopmostMenuItem"
+                      Header="📌 Siempre encima (Topmost)"
+                      IsCheckable="True"
+                      IsChecked="True"
+                      Click="TopmostMenuItem_Click"/>
+            <MenuItem x:Name="LockPositionMenuItem"
+                      Header="🔒 Bloquear posición"
+                      IsCheckable="True"
+                      IsChecked="False"
+                      Click="LockPositionMenuItem_Click"/>
+            <MenuItem x:Name="StartWithWindowsMenuItem"
+                      Header="🚀 Iniciar con Windows"
+                      IsCheckable="True"
+                      IsChecked="True"
+                      Click="StartWithWindowsMenuItem_Click"/>
+            <MenuItem x:Name="AdminMenuItem"
+                      Header="🛡️ Reiniciar como Administrador"
+                      Click="RestartAsAdmin_Click"/>
+
+            <Separator/>
+
+            <MenuItem Header="❌ Cerrar Widget" Click="CloseMenuItem_Click"/>
+        </ContextMenu>
+    </Window.ContextMenu>
+
+    <!-- Contenedor principal sin borde ni fondo exterior -->
+    <StackPanel x:Name="RootContainer" Margin="4" Background="Transparent">
+        <StackPanel.LayoutTransform>
+            <ScaleTransform x:Name="WidgetScaleTransform" ScaleX="1.0" ScaleY="1.0"/>
+        </StackPanel.LayoutTransform>
+
+        <!-- Panel que alterna entre Vertical y Horizontal -->
+        <StackPanel x:Name="CardsPanel" Orientation="Vertical">
+
+            <!-- Cajita 1: CPU -->
+            <Border x:Name="CpuCard"
+                    Width="215"
+                    Background="#EE141720"
+                    BorderBrush="#38FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="12,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                        <TextBlock x:Name="CpuTitleText" Text="CPU (AMD)" Foreground="#FF7B54" FontSize="11" FontWeight="Bold"/>
+                        <TextBlock x:Name="CpuNameText"
+                                   Text="Detectando..."
+                                   Foreground="#99AAB8"
+                                   FontSize="10"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="115"/>
+                        <TextBlock x:Name="CpuLoadText"
+                                   Text="Uso: --%"
+                                   Foreground="#CED6E0"
+                                   FontSize="11"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="CpuTempText"
+                               Grid.Column="1"
+                               Text="--°C"
+                               Foreground="#00E676"
+                               FontSize="24"
+                               FontWeight="Bold"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <!-- Cajita 2: GPU -->
+            <Border x:Name="GpuCard"
+                    Width="215"
+                    Margin="0,8,0,0"
+                    Background="#EE141720"
+                    BorderBrush="#38FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="12,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                        <TextBlock x:Name="GpuTitleText" Text="GPU (NVIDIA)" Foreground="#76B900" FontSize="11" FontWeight="Bold"/>
+                        <TextBlock x:Name="GpuNameText"
+                                   Text="Detectando..."
+                                   Foreground="#99AAB8"
+                                   FontSize="10"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="115"/>
+                        <TextBlock x:Name="GpuLoadText"
+                                   Text="Uso: --%"
+                                   Foreground="#CED6E0"
+                                   FontSize="11"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="GpuTempText"
+                               Grid.Column="1"
+                               Text="--°C"
+                               Foreground="#00E676"
+                               FontSize="24"
+                               FontWeight="Bold"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+        </StackPanel>
+
+        <!-- Botón de aviso solo si falta permiso de Administrador -->
+        <Button x:Name="AdminWarningButton"
+                Visibility="Collapsed"
+                Margin="0,6,0,0"
+                Padding="8,4"
+                Background="#D92A2010"
+                BorderBrush="#88FF9800"
+                Foreground="#FFD54F"
+                FontSize="10"
+                Cursor="Hand"
+                Click="RestartAsAdmin_Click"
+                Content="🛡️ Clic para activar temp. CPU (Admin)"/>
+    </StackPanel>
+</Window>
