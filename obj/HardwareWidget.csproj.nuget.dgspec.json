@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\csolo\\Documents\\witget\\HardwareWidget.csproj": {}
+    "C:\\Users\\csolo\\Documents\\REPOS_PERSONALES\\witget\\HardwareWidget.csproj": {}
   },
   "projects": {
-    "C:\\Users\\csolo\\Documents\\witget\\HardwareWidget.csproj": {
+    "C:\\Users\\csolo\\Documents\\REPOS_PERSONALES\\witget\\HardwareWidget.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\csolo\\Documents\\witget\\HardwareWidget.csproj",
+        "projectUniqueName": "C:\\Users\\csolo\\Documents\\REPOS_PERSONALES\\witget\\HardwareWidget.csproj",
         "projectName": "HardwareWidget",
-        "projectPath": "C:\\Users\\csolo\\Documents\\witget\\HardwareWidget.csproj",
+        "projectPath": "C:\\Users\\csolo\\Documents\\REPOS_PERSONALES\\witget\\HardwareWidget.csproj",
         "packagesPath": "C:\\Users\\csolo\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\csolo\\Documents\\witget\\obj\\",
+        "outputPath": "C:\\Users\\csolo\\Documents\\REPOS_PERSONALES\\witget\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\csolo\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -46,6 +46,10 @@
             "LibreHardwareMonitorLib": {
               "target": "Package",
               "version": "[0.9.4, )"
+            },
+            "Microsoft.Diagnostics.Tracing.TraceEvent": {
+              "target": "Package",
+              "version": "[4.0.0, )"
             }
           },
           "imports": [

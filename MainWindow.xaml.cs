@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,6 +20,7 @@ public class WidgetSettings
     public double Scale { get; set; } = 1.0;
     public bool IsHorizontal { get; set; } = false;
     public bool MinimalistMode { get; set; } = false;
+    public bool ShowFps { get; set; } = true;
     public bool Topmost { get; set; } = true;
     public bool LockPosition { get; set; } = false;
     public bool StartWithWindows { get; set; } = true;
@@ -68,6 +68,7 @@ public partial class MainWindow : Window
 
     private readonly Computer _computer;
     private readonly UpdateVisitor _updateVisitor = new();
+    private readonly FpsMonitor _fpsMonitor = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly DispatcherTimer _topmostTimer;
     private readonly bool _isAdmin;
@@ -79,6 +80,7 @@ public partial class MainWindow : Window
     private WidgetSettings _settings = new();
     private bool _isInitializing = true;
     private bool _closedBySignal = false;
+    private volatile bool _showFps = true;
     private volatile bool _isDragging;
     private IntPtr _hwnd;
 
@@ -93,8 +95,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        string projectDir = @"c:\Users\csolo\Documents\witget";
-        _baseDir = Directory.Exists(projectDir) ? projectDir : AppDomain.CurrentDomain.BaseDirectory;
+        _baseDir = ElevatedTaskHelper.ResolveBaseDirectory();
         _settingsPath = Path.Combine(_baseDir, "widget_settings.json");
         _instanceFilePath = Path.Combine(_baseDir, "active_instance.txt");
         _closeSignalPath = Path.Combine(_baseDir, "close.signal");
@@ -107,7 +108,7 @@ public partial class MainWindow : Window
         }
         catch { }
 
-        _isAdmin = IsRunningAsAdministrator();
+        _isAdmin = ElevatedTaskHelper.IsRunningAsAdministrator();
         if (_isAdmin)
         {
             AdminMenuItem.Visibility = Visibility.Collapsed;
@@ -235,9 +236,11 @@ public partial class MainWindow : Window
         TopmostMenuItem.IsChecked = _settings.Topmost;
         LockPositionMenuItem.IsChecked = _settings.LockPosition;
         MinimalistMenuItem.IsChecked = _settings.MinimalistMode;
+        ShowFpsMenuItem.IsChecked = _settings.ShowFps;
         StartWithWindowsMenuItem.IsChecked = _settings.StartWithWindows;
 
         ApplyMinimalistMode(_settings.MinimalistMode);
+        ApplyShowFps(_settings.ShowFps, manageMonitor: false);
         ApplyOrientation(_settings.IsHorizontal);
         ApplyOpacity(OpacitySlider.Value);
         ApplyScale(ScaleSlider.Value);
@@ -252,6 +255,7 @@ public partial class MainWindow : Window
             _settings.Scale = ScaleSlider.Value;
             _settings.IsHorizontal = HorizontalLayoutMenuItem.IsChecked;
             _settings.MinimalistMode = MinimalistMenuItem.IsChecked;
+            _settings.ShowFps = ShowFpsMenuItem.IsChecked;
             _settings.Topmost = Topmost;
             _settings.LockPosition = LockPositionMenuItem.IsChecked;
             _settings.StartWithWindows = StartWithWindowsMenuItem.IsChecked;
@@ -268,14 +272,18 @@ public partial class MainWindow : Window
     {
         try
         {
-            string exePath = Path.Combine(_baseDir, @"bin\Release\net8.0-windows\HardwareWidget.exe");
-            if (!File.Exists(exePath))
-            {
-                exePath = Environment.ProcessPath ?? "";
-            }
+            string exePath = ElevatedTaskHelper.ResolveExePath(_baseDir);
             if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return;
 
             using RegistryKey? runKey = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", writable: true);
+
+            if (_isAdmin && ElevatedTaskHelper.RegisterOrUpdateTask(exePath, _baseDir, enable))
+            {
+                // Eliminar la entrada Run clásica para evitar un segundo arranque sin permisos de Administrador
+                runKey?.DeleteValue("HardwareWidget", throwOnMissingValue: false);
+                return;
+            }
+
             if (enable)
             {
                 runKey?.SetValue("HardwareWidget", $"\"{exePath}\"");
@@ -304,6 +312,11 @@ public partial class MainWindow : Window
 
         ForceAboveTaskbar();
         _topmostTimer.Start();
+
+        if (_showFps)
+        {
+            _fpsMonitor.Start();
+        }
 
         _ = Task.Run(() => SensorLoopAsync(_cts.Token));
     }
@@ -415,6 +428,8 @@ public partial class MainWindow : Window
                 }
             }
 
+            FpsSnapshot? fpsSnapshot = _showFps ? _fpsMonitor.GetCurrentSnapshot() : null;
+
             _ = Dispatcher.InvokeAsync(() =>
             {
                 if (_isDragging || _closedBySignal) return;
@@ -449,6 +464,29 @@ public partial class MainWindow : Window
                     GpuTempText.Text = "--°C";
                     GpuTempText.Foreground = MutedBrush;
                 }
+
+                if (_showFps && fpsSnapshot.HasValue)
+                {
+                    FpsAppText.Text = fpsSnapshot.Value.AppName;
+                    if (fpsSnapshot.Value.Fps is double fps)
+                    {
+                        FpsValueText.Text = $"{fps:0}";
+                        FpsValueText.Foreground = GetFpsBrush(fps);
+                        FpsFrameTimeText.Text = fpsSnapshot.Value.FrameTimeMs is double ft
+                            ? $"Frame: {ft:0.0} ms"
+                            : "Frame: -- ms";
+                    }
+                    else
+                    {
+                        FpsValueText.Text = "--";
+                        FpsValueText.Foreground = MutedBrush;
+                        FpsFrameTimeText.Text = "Frame: -- ms";
+                        if (fpsSnapshot.Value.RequiresAdmin && !_isAdmin)
+                        {
+                            AdminWarningButton.Visibility = Visibility.Visible;
+                        }
+                    }
+                }
             }, DispatcherPriority.Background);
         }
         catch { }
@@ -475,6 +513,47 @@ public partial class MainWindow : Window
         return RedBrush;
     }
 
+    private static SolidColorBrush GetFpsBrush(double fps)
+    {
+        if (fps >= 60) return GreenBrush;
+        if (fps >= 30) return YellowBrush;
+        return RedBrush;
+    }
+
+    // --- MOSTRAR / OCULTAR FPS ---
+    private void ShowFpsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyShowFps(ShowFpsMenuItem.IsChecked, manageMonitor: true);
+        SaveSettings();
+    }
+
+    private void ApplyShowFps(bool showFps, bool manageMonitor)
+    {
+        _showFps = showFps;
+        if (FpsCard != null)
+        {
+            FpsCard.Visibility = showFps ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (!manageMonitor) return;
+
+        if (showFps)
+        {
+            _fpsMonitor.Start();
+        }
+        else
+        {
+            _fpsMonitor.Stop();
+            if (FpsValueText != null)
+            {
+                FpsValueText.Text = "--";
+                FpsValueText.Foreground = MutedBrush;
+            }
+            if (FpsAppText != null) FpsAppText.Text = "En espera";
+            if (FpsFrameTimeText != null) FpsFrameTimeText.Text = "Frame: -- ms";
+        }
+    }
+
     // --- MODO MINIMALISTA ---
     private void MinimalistMenuItem_Click(object sender, RoutedEventArgs e)
     {
@@ -484,45 +563,59 @@ public partial class MainWindow : Window
 
     private void ApplyMinimalistMode(bool isMinimalist)
     {
-        if (CpuTitleText == null || GpuTitleText == null) return;
+        if (CpuTitleText == null || GpuTitleText == null || FpsTitleText == null) return;
 
         if (isMinimalist)
         {
             CpuTitleText.Text = "CPU";
             GpuTitleText.Text = "GPU";
+            FpsTitleText.Text = "FPS";
             CpuTitleText.FontSize = 15;
             GpuTitleText.FontSize = 15;
+            FpsTitleText.FontSize = 15;
 
             CpuNameText.Visibility = Visibility.Collapsed;
             CpuLoadText.Visibility = Visibility.Collapsed;
             GpuNameText.Visibility = Visibility.Collapsed;
             GpuLoadText.Visibility = Visibility.Collapsed;
+            FpsAppText.Visibility = Visibility.Collapsed;
+            FpsFrameTimeText.Visibility = Visibility.Collapsed;
 
             CpuCard.Width = double.NaN;
             GpuCard.Width = double.NaN;
+            FpsCard.Width = double.NaN;
             CpuCard.MinWidth = 120;
             GpuCard.MinWidth = 120;
+            FpsCard.MinWidth = 120;
             CpuCard.Padding = new Thickness(12, 6, 12, 6);
             GpuCard.Padding = new Thickness(12, 6, 12, 6);
+            FpsCard.Padding = new Thickness(12, 6, 12, 6);
         }
         else
         {
             CpuTitleText.Text = "CPU (AMD)";
             GpuTitleText.Text = "GPU (NVIDIA)";
+            FpsTitleText.Text = "FPS (VENTANA)";
             CpuTitleText.FontSize = 11;
             GpuTitleText.FontSize = 11;
+            FpsTitleText.FontSize = 11;
 
             CpuNameText.Visibility = Visibility.Visible;
             CpuLoadText.Visibility = Visibility.Visible;
             GpuNameText.Visibility = Visibility.Visible;
             GpuLoadText.Visibility = Visibility.Visible;
+            FpsAppText.Visibility = Visibility.Visible;
+            FpsFrameTimeText.Visibility = Visibility.Visible;
 
             CpuCard.Width = 215;
             GpuCard.Width = 215;
+            FpsCard.Width = 215;
             CpuCard.MinWidth = 0;
             GpuCard.MinWidth = 0;
+            FpsCard.MinWidth = 0;
             CpuCard.Padding = new Thickness(12, 10, 12, 10);
             GpuCard.Padding = new Thickness(12, 10, 12, 10);
+            FpsCard.Padding = new Thickness(12, 10, 12, 10);
         }
     }
 
@@ -572,12 +665,13 @@ public partial class MainWindow : Window
 
     private void ApplyOrientation(bool isHorizontal)
     {
-        if (CardsPanel == null || GpuCard == null) return;
+        if (CardsPanel == null || GpuCard == null || FpsCard == null) return;
 
         if (isHorizontal)
         {
             CardsPanel.Orientation = Orientation.Horizontal;
             GpuCard.Margin = new Thickness(8, 0, 0, 0);
+            FpsCard.Margin = new Thickness(8, 0, 0, 0);
             HorizontalLayoutMenuItem.IsChecked = true;
             VerticalLayoutMenuItem.IsChecked = false;
         }
@@ -585,16 +679,10 @@ public partial class MainWindow : Window
         {
             CardsPanel.Orientation = Orientation.Vertical;
             GpuCard.Margin = new Thickness(0, 8, 0, 0);
+            FpsCard.Margin = new Thickness(0, 8, 0, 0);
             VerticalLayoutMenuItem.IsChecked = true;
             HorizontalLayoutMenuItem.IsChecked = false;
         }
-    }
-
-    private static bool IsRunningAsAdministrator()
-    {
-        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-        WindowsPrincipal principal = new(identity);
-        return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
 
     private void RestartAsAdmin_Click(object sender, RoutedEventArgs e)
@@ -602,12 +690,21 @@ public partial class MainWindow : Window
         try
         {
             SaveSettings();
+
+            string resolvedExe = ElevatedTaskHelper.ResolveExePath(_baseDir);
+            if (ElevatedTaskHelper.TryRunElevatedTask(resolvedExe))
+            {
+                Application.Current.Shutdown();
+                return;
+            }
+
             string? exePath = Environment.ProcessPath;
             if (string.IsNullOrEmpty(exePath)) return;
 
             ProcessStartInfo startInfo = new()
             {
                 FileName = exePath,
+                WorkingDirectory = _baseDir,
                 UseShellExecute = true,
                 Verb = "runas"
             };
@@ -669,6 +766,7 @@ public partial class MainWindow : Window
     {
         _topmostTimer.Stop();
         _cts.Cancel();
+        _fpsMonitor.Dispose();
         try { _computer.Close(); } catch { }
     }
 }
