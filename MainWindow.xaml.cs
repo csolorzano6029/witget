@@ -117,9 +117,13 @@ public partial class MainWindow : Window
     private readonly string _instanceId = Guid.NewGuid().ToString("N");
     private readonly char[] _classNameBuffer = new char[64];
     private WidgetSettings _settings = new();
+    private string _cpuTitleLabel = "CPU";
+    private string _gpuTitleLabel = "GPU";
     private bool _isInitializing = true;
     private bool _closedBySignal = false;
     private int _instanceCheckTick;
+    private volatile bool _wasPawnIoInstalled;
+    private volatile bool _isInstallingPawnIo;
     private volatile bool _showFps = true;
     private volatile bool _isDragging;
     private IntPtr _hwnd;
@@ -460,6 +464,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            _wasPawnIoInstalled = LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled;
             _computer.Open();
         }
         catch
@@ -472,13 +477,25 @@ public partial class MainWindow : Window
         {
             if (!_isDragging && !_closedBySignal)
             {
-                ReadSensorsAndDispatch();
+                bool pawnIoNow = LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled;
+                if (!_wasPawnIoInstalled && pawnIoNow)
+                {
+                    _wasPawnIoInstalled = true;
+                    try
+                    {
+                        _computer.Close();
+                        _computer.Open();
+                    }
+                    catch { }
+                }
+
+                ReadSensorsAndDispatch(pawnIoNow);
             }
         }
         while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
     }
 
-    private void ReadSensorsAndDispatch()
+    private void ReadSensorsAndDispatch(bool pawnIoInstalled)
     {
         try
         {
@@ -486,16 +503,20 @@ public partial class MainWindow : Window
 
             float? cpuTemp = null;
             float? cpuLoad = null;
-            string cpuName = "AMD CPU";
+            string cpuName = "Detectando...";
+            string cpuTitle = _cpuTitleLabel;
 
             float? gpuTemp = null;
             float? gpuLoad = null;
-            string gpuName = "NVIDIA GPU";
+            string gpuName = "Detectando...";
+            string gpuTitle = _gpuTitleLabel;
+            int bestGpuPriority = 0;
 
             foreach (IHardware hardware in _computer.Hardware)
             {
                 if (hardware.HardwareType == HardwareType.Cpu)
                 {
+                    cpuTitle = ResolveCpuTitle(hardware.Name);
                     cpuName = CleanHardwareName(hardware.Name);
 
                     foreach (ISensor sensor in hardware.Sensors)
@@ -538,36 +559,67 @@ public partial class MainWindow : Window
 
                 if (hardware.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel)
                 {
-                    bool isNvidia = hardware.HardwareType == HardwareType.GpuNvidia;
-                    if (isNvidia || gpuTemp == null)
+                    int gpuPriority = hardware.HardwareType switch
                     {
+                        HardwareType.GpuNvidia => 3,
+                        HardwareType.GpuAmd => 2,
+                        HardwareType.GpuIntel => 1,
+                        _ => 0
+                    };
+
+                    if (gpuPriority > bestGpuPriority || (gpuPriority == bestGpuPriority && gpuTemp == null))
+                    {
+                        bestGpuPriority = gpuPriority;
+                        gpuTitle = hardware.HardwareType switch
+                        {
+                            HardwareType.GpuNvidia => "GPU (NVIDIA)",
+                            HardwareType.GpuAmd => "GPU (AMD)",
+                            HardwareType.GpuIntel => "GPU (INTEL)",
+                            _ => "GPU"
+                        };
                         gpuName = CleanHardwareName(hardware.Name);
+                        gpuTemp = null;
+                        gpuLoad = null;
 
                         foreach (ISensor sensor in hardware.Sensors)
                         {
                             if (sensor.SensorType == SensorType.Temperature && sensor.Value.HasValue)
                             {
-                                if (sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) || gpuTemp == null)
+                                if (sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
+                                    sensor.Name.Contains("Hot Spot", StringComparison.OrdinalIgnoreCase) ||
+                                    gpuTemp == null)
                                 {
                                     gpuTemp = sensor.Value.Value;
                                 }
                             }
-                            else if (sensor.SensorType == SensorType.Load &&
-                                     sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) &&
-                                     sensor.Value.HasValue)
+                            else if (sensor.SensorType == SensorType.Load && sensor.Value.HasValue)
                             {
-                                gpuLoad = sensor.Value.Value;
+                                if (sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
+                                    sensor.Name.Contains("D3D 3D", StringComparison.OrdinalIgnoreCase) ||
+                                    gpuLoad == null)
+                                {
+                                    gpuLoad = sensor.Value.Value;
+                                }
                             }
                         }
                     }
                 }
             }
 
+            _cpuTitleLabel = cpuTitle;
+            _gpuTitleLabel = gpuTitle;
+
             FpsSnapshot? fpsSnapshot = _showFps ? _fpsMonitor.GetCurrentSnapshot() : null;
 
             _ = Dispatcher.InvokeAsync(() =>
             {
                 if (_isDragging || _closedBySignal) return;
+
+                if (!MinimalistMenuItem.IsChecked)
+                {
+                    CpuTitleText.Text = cpuTitle;
+                    GpuTitleText.Text = gpuTitle;
+                }
 
                 CpuNameText.Text = cpuName;
                 CpuLoadText.Text = cpuLoad.HasValue ? $"Uso: {cpuLoad.Value:0}%" : "Uso: --%";
@@ -583,7 +635,22 @@ public partial class MainWindow : Window
                     CpuTempText.Foreground = MutedBrush;
                     if (!_isAdmin)
                     {
+                        AdminWarningButton.Tag = "admin";
+                        AdminWarningButton.Content = "🛡️ Clic para activar temp. CPU (Admin)";
                         AdminWarningButton.Visibility = Visibility.Visible;
+                    }
+                    else if (!pawnIoInstalled)
+                    {
+                        AdminWarningButton.Tag = "pawnio";
+                        if (!_isInstallingPawnIo)
+                        {
+                            AdminWarningButton.Content = "⬇️ Clic para instalar driver PawnIO (Temp. CPU)";
+                        }
+                        AdminWarningButton.Visibility = Visibility.Visible;
+                    }
+                    else
+                    {
+                        AdminWarningButton.Visibility = Visibility.Collapsed;
                     }
                 }
 
@@ -618,6 +685,8 @@ public partial class MainWindow : Window
                         FpsFrameTimeText.Text = "Frame: -- ms";
                         if (fpsSnapshot.Value.RequiresAdmin && !_isAdmin)
                         {
+                            AdminWarningButton.Tag = "admin";
+                            AdminWarningButton.Content = "🛡️ Clic para activar temp. CPU (Admin)";
                             AdminWarningButton.Visibility = Visibility.Visible;
                         }
                     }
@@ -627,9 +696,25 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private static string ResolveCpuTitle(string rawName)
+    {
+        if (rawName.Contains("Intel", StringComparison.OrdinalIgnoreCase))
+            return "CPU (INTEL)";
+        if (rawName.Contains("AMD", StringComparison.OrdinalIgnoreCase) ||
+            rawName.Contains("Ryzen", StringComparison.OrdinalIgnoreCase) ||
+            rawName.Contains("Threadripper", StringComparison.OrdinalIgnoreCase) ||
+            rawName.Contains("EPYC", StringComparison.OrdinalIgnoreCase))
+            return "CPU (AMD)";
+        return "CPU";
+    }
+
     private static string CleanHardwareName(string rawName)
     {
         return rawName
+            .Replace("Intel(R) ", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Intel ", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("(R)", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("(TM)", "", StringComparison.OrdinalIgnoreCase)
             .Replace("AMD ", "", StringComparison.OrdinalIgnoreCase)
             .Replace("NVIDIA ", "", StringComparison.OrdinalIgnoreCase)
             .Replace("GeForce ", "", StringComparison.OrdinalIgnoreCase)
@@ -638,6 +723,7 @@ public partial class MainWindow : Window
             .Replace("16-Core", "", StringComparison.OrdinalIgnoreCase)
             .Replace("8-Core", "", StringComparison.OrdinalIgnoreCase)
             .Replace("6-Core", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("  ", " ", StringComparison.Ordinal)
             .Trim();
     }
 
@@ -728,8 +814,8 @@ public partial class MainWindow : Window
         }
         else
         {
-            CpuTitleText.Text = "CPU (AMD)";
-            GpuTitleText.Text = "GPU (NVIDIA)";
+            CpuTitleText.Text = _cpuTitleLabel;
+            GpuTitleText.Text = _gpuTitleLabel;
             FpsTitleText.Text = "FPS (VENTANA)";
             CpuTitleText.FontSize = 11;
             GpuTitleText.FontSize = 11;
@@ -820,6 +906,65 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ActionWarningButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (AdminWarningButton.Tag as string == "pawnio")
+        {
+            await InstallPawnIoAsync();
+            return;
+        }
+
+        RestartAsAdmin_Click(sender, e);
+    }
+
+    private async Task InstallPawnIoAsync()
+    {
+        if (_isInstallingPawnIo) return;
+        _isInstallingPawnIo = true;
+        AdminWarningButton.IsEnabled = false;
+        AdminWarningButton.Content = "⏳ Instalando driver PawnIO...";
+
+        bool installed = false;
+        try
+        {
+            ProcessStartInfo psi = new()
+            {
+                FileName = "winget",
+                Arguments = "install --id namazso.PawnIO -e --silent --accept-source-agreements --accept-package-agreements",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using Process? proc = Process.Start(psi);
+            if (proc != null)
+            {
+                await proc.WaitForExitAsync(_cts.Token);
+                installed = LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled;
+            }
+        }
+        catch { }
+
+        if (!installed)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "https://pawnio.eu/",
+                    UseShellExecute = true
+                });
+            }
+            catch { }
+        }
+
+        _isInstallingPawnIo = false;
+        AdminWarningButton.IsEnabled = true;
+        if (!LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled)
+        {
+            AdminWarningButton.Content = "⬇️ Clic para instalar driver PawnIO (Temp. CPU)";
+        }
+    }
+
     private void RestartAsAdmin_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -846,7 +991,7 @@ public partial class MainWindow : Window
 
             if (exePath.EndsWith("dotnet.exe", StringComparison.OrdinalIgnoreCase))
             {
-                string dllPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                string dllPath = Path.Combine(AppContext.BaseDirectory, "HardwareWidget.dll");
                 startInfo.Arguments = $"\"{dllPath}\"";
             }
 

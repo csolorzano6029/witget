@@ -137,7 +137,7 @@
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
-                        <TextBlock x:Name="CpuTitleText" Text="CPU (AMD)" Foreground="#FF7B54" FontSize="11" FontWeight="Bold"/>
+                        <TextBlock x:Name="CpuTitleText" Text="CPU" Foreground="#FF7B54" FontSize="11" FontWeight="Bold"/>
                         <TextBlock x:Name="CpuNameText"
                                    Text="Detectando..."
                                    Foreground="#99AAB8"
@@ -177,7 +177,7 @@
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
-                        <TextBlock x:Name="GpuTitleText" Text="GPU (NVIDIA)" Foreground="#76B900" FontSize="11" FontWeight="Bold"/>
+                        <TextBlock x:Name="GpuTitleText" Text="GPU" Foreground="#76B900" FontSize="11" FontWeight="Bold"/>
                         <TextBlock x:Name="GpuNameText"
                                    Text="Detectando..."
                                    Foreground="#99AAB8"
@@ -242,7 +242,7 @@
             </Border>
         </StackPanel>
 
-        <!-- Botón de aviso solo si falta permiso de Administrador -->
+        <!-- Botón de aviso si falta permiso de Administrador o driver PawnIO -->
         <Button x:Name="AdminWarningButton"
                 Visibility="Collapsed"
                 Margin="0,6,0,0"
@@ -252,7 +252,7 @@
                 Foreground="#FFD54F"
                 FontSize="10"
                 Cursor="Hand"
-                Click="RestartAsAdmin_Click"
+                Click="ActionWarningButton_Click"
                 Content="🛡️ Clic para activar temp. CPU (Admin)"/>
     </StackPanel>
 </Window>

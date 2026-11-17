@@ -24,6 +24,15 @@ Widget flotante y minimalista para Windows 10/11 (WPF / .NET 8) que muestra en t
 2. **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)** (para compilar y generar el `.exe`).
 3. **[PawnIO](https://pawnio.eu/)** instalado en el sistema (necesario para que `LibreHardwareMonitorLib` `0.9.6` lea sensores de temperatura de CPU sin usar el controlador heredado `WinRing0`, que Windows Defender suele bloquear).
 
+### Instalación rápida por terminal (`winget`)
+
+```powershell
+winget install Microsoft.DotNet.SDK.8
+winget install namazso.PawnIO
+```
+
+> **Nota:** Si acabas de instalar `.NET 8 SDK`, cierra y vuelve a abrir la terminal antes de ejecutar `dotnet`. Si solo vas a ejecutar una compilación portable (`publish`) en otro PC sin compilar nada, en ese PC únicamente necesitas instalar **PawnIO** para leer la temperatura de la CPU.
+
 ## Cómo generar el `.exe`
 
 1. Clona o descarga el repositorio y abre una terminal en la carpeta del proyecto:
@@ -38,13 +47,20 @@ Widget flotante y minimalista para Windows 10/11 (WPF / .NET 8) que muestra en t
    ```text
    bin\Release\net8.0-windows\HardwareWidget.exe
    ```
+   *(Este `.exe` depende del resto de archivos `.dll` en esa carpeta y de tener .NET 8 instalado en el equipo).*
 
-### Opcional: generar una versión portable (sin requerir .NET 8 instalado en otro PC)
+### Generar un `.exe` único portable (para pasar a otro PC)
+
+Si quieres compartir **un solo archivo `.exe`** que funcione en otro PC sin tener que instalar .NET 8 ni copiar carpetas adicionales:
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
-Los archivos listos para copiar estarán en `bin\Release\net8.0-windows\win-x64\publish\`.
+
+El ejecutable único listo para compartir se generará en:
+```text
+bin\Release\net8.0-windows\win-x64\publish\HardwareWidget.exe
+```
 
 ## Cómo ejecutarlo
 
