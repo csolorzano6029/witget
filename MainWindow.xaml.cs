@@ -48,9 +48,25 @@ public partial class MainWindow : Window
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
-    private const uint SWP_SHOWWINDOW = 0x0040;
+    private const uint SWP_NOOWNERZORDER = 0x0200;
+    private const uint GW_HWNDPREV = 3;
+    private const uint GA_ROOT = 2;
+    private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    private const uint EVENT_SYSTEM_MENUPOPUPSTART = 0x0006;
+    private const uint EVENT_SYSTEM_CAPTURESTART = 0x0008;
+    private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+    private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
+
+    private delegate void WinEventDelegate(
+        IntPtr hWinEventHook,
+        uint eventType,
+        IntPtr hwnd,
+        int idObject,
+        int idChild,
+        uint dwEventThread,
+        uint dwmsEventTime);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -60,6 +76,28 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, char[] lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetWinEventHook(
+        uint eventMin,
+        uint eventMax,
+        IntPtr hmodWinEventProc,
+        WinEventDelegate lpfnWinEventProc,
+        uint idProcess,
+        uint idThread,
+        uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
 
     private static readonly SolidColorBrush GreenBrush = CreateFrozenBrush(0, 230, 118);
     private static readonly SolidColorBrush YellowBrush = CreateFrozenBrush(255, 179, 0);
@@ -77,12 +115,16 @@ public partial class MainWindow : Window
     private readonly string _instanceFilePath;
     private readonly string _closeSignalPath;
     private readonly string _instanceId = Guid.NewGuid().ToString("N");
+    private readonly char[] _classNameBuffer = new char[64];
     private WidgetSettings _settings = new();
     private bool _isInitializing = true;
     private bool _closedBySignal = false;
+    private int _instanceCheckTick;
     private volatile bool _showFps = true;
     private volatile bool _isDragging;
     private IntPtr _hwnd;
+    private IntPtr _winEventHook;
+    private WinEventDelegate? _winEventDelegate;
 
     private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
     {
@@ -124,21 +166,25 @@ public partial class MainWindow : Window
             IsMotherboardEnabled = true
         };
 
-        // Timer cada 400ms: verifica instancia única y mantiene el widget sobre la Barra de Tareas
+        // Timer ligero: verifica instancia única cada ~400ms y asegura el orden Z sobre la Barra de Tareas solo si hace falta
         _topmostTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(400)
+            Interval = TimeSpan.FromMilliseconds(100)
         };
         _topmostTimer.Tick += (_, _) =>
         {
-            if (ShouldCloseForNewerInstance())
+            if (++_instanceCheckTick >= 4)
             {
-                _closedBySignal = true;
-                Close();
-                return;
+                _instanceCheckTick = 0;
+                if (ShouldCloseForNewerInstance())
+                {
+                    _closedBySignal = true;
+                    Close();
+                    return;
+                }
             }
 
-            if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen)
+            if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && IsTaskbarAboveWidget())
             {
                 ForceAboveTaskbar();
             }
@@ -180,7 +226,89 @@ public partial class MainWindow : Window
             int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
             SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
             ForceAboveTaskbar();
+
+            _winEventDelegate = OnWinEvent;
+            _winEventHook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_CAPTURESTART,
+                IntPtr.Zero,
+                _winEventDelegate,
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         }
+    }
+
+    private void OnWinEvent(
+        IntPtr hWinEventHook,
+        uint eventType,
+        IntPtr hwnd,
+        int idObject,
+        int idChild,
+        uint dwEventThread,
+        uint dwmsEventTime)
+    {
+        if (!Topmost || _isDragging || _closedBySignal || WidgetContextMenu.IsOpen || _hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        if (eventType is not (EVENT_SYSTEM_FOREGROUND or EVENT_SYSTEM_MENUPOPUPSTART or EVENT_SYSTEM_CAPTURESTART))
+        {
+            return;
+        }
+
+        if (IsTaskbarAboveWidget())
+        {
+            ForceAboveTaskbar();
+        }
+        else if (IsTaskbarEventWindow(hwnd))
+        {
+            // Si la Barra de Tareas recibió clic/foco pero aún está subiendo en el Z-order
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+            {
+                if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && IsTaskbarAboveWidget())
+                {
+                    ForceAboveTaskbar();
+                }
+            });
+        }
+    }
+
+    private bool IsTaskbarAboveWidget()
+    {
+        if (_hwnd == IntPtr.Zero) return false;
+
+        IntPtr current = GetWindow(_hwnd, GW_HWNDPREV);
+        for (int i = 0; i < 40 && current != IntPtr.Zero; i++)
+        {
+            if (IsTaskbarWindow(current))
+            {
+                return true;
+            }
+            current = GetWindow(current, GW_HWNDPREV);
+        }
+        return false;
+    }
+
+    private bool IsTaskbarEventWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        if (IsTaskbarWindow(hwnd)) return true;
+
+        IntPtr root = GetAncestor(hwnd, GA_ROOT);
+        return root != IntPtr.Zero && root != hwnd && IsTaskbarWindow(root);
+    }
+
+    private bool IsTaskbarWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        int len = GetClassName(hwnd, _classNameBuffer, _classNameBuffer.Length);
+        if (len <= 0) return false;
+
+        ReadOnlySpan<char> className = _classNameBuffer.AsSpan(0, len);
+        return className.Equals("Shell_TrayWnd", StringComparison.Ordinal) ||
+               className.Equals("Shell_SecondaryTrayWnd", StringComparison.Ordinal);
     }
 
     private void ForceAboveTaskbar()
@@ -188,19 +316,26 @@ public partial class MainWindow : Window
         if (_hwnd == IntPtr.Zero) return;
         if (Topmost)
         {
-            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
         else
         {
-            SetWindowPos(_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            SetWindowPos(_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
     }
 
     private void Window_Deactivated(object sender, EventArgs e)
     {
-        if (Topmost)
+        if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen)
         {
             ForceAboveTaskbar();
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+            {
+                if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && IsTaskbarAboveWidget())
+                {
+                    ForceAboveTaskbar();
+                }
+            });
         }
     }
 
@@ -765,6 +900,12 @@ public partial class MainWindow : Window
     private void Window_Closed(object sender, EventArgs e)
     {
         _topmostTimer.Stop();
+        if (_winEventHook != IntPtr.Zero)
+        {
+            UnhookWinEvent(_winEventHook);
+            _winEventHook = IntPtr.Zero;
+        }
+        _winEventDelegate = null;
         _cts.Cancel();
         _fpsMonitor.Dispose();
         try { _computer.Close(); } catch { }

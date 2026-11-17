@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("HardwareWidget")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+75182008f6b44d2727a33a2c4e3d70f9ab27d35f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0867d8820423f3a536f84d0a769f46b23ce855e5")]
 [assembly: System.Reflection.AssemblyProductAttribute("HardwareWidget")]
 [assembly: System.Reflection.AssemblyTitleAttribute("HardwareWidget")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

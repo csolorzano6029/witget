@@ -5,8 +5,8 @@
   "MinimalistMode": true,
   "ShowFps": true,
   "Topmost": true,
-  "LockPosition": false,
+  "LockPosition": true,
   "StartWithWindows": true,
-  "Left": 1136,
-  "Top": 912
+  "Left": 1099.3333333333333,
+  "Top": 912.6666666666666
 }
