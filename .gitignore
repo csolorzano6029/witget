@@ -1,0 +1,25 @@
+# .NET / Visual Studio / IDE
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+publish/
+
+# Archivos de ejecución y estado del widget
+active_instance.txt
+close.signal
+widget_settings.json
+error.log
+fps_error.log
+*.log
+*.sys
