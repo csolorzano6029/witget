@@ -25,12 +25,40 @@
                       IsChecked="False"
                       StaysOpenOnClick="True"
                       Click="MinimalistMenuItem_Click"/>
+            <MenuItem x:Name="ShowRamMenuItem"
+                      Header="🧠 Mostrar RAM"
+                      IsCheckable="True"
+                      IsChecked="True"
+                      StaysOpenOnClick="True"
+                      Click="ShowRamMenuItem_Click"/>
             <MenuItem x:Name="ShowFpsMenuItem"
                       Header="🎮 Mostrar FPS"
                       IsCheckable="True"
                       IsChecked="True"
                       StaysOpenOnClick="True"
                       Click="ShowFpsMenuItem_Click"/>
+
+            <!-- Estilo de Fondo -->
+            <MenuItem Header="🎨 Fondo">
+                <MenuItem x:Name="IndividualBgMenuItem"
+                          Header="🗂️ Tarjetas individuales"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          StaysOpenOnClick="True"
+                          Click="IndividualBg_Click"/>
+                <MenuItem x:Name="UnifiedBgMenuItem"
+                          Header="🧱 Bloque único"
+                          IsCheckable="True"
+                          IsChecked="False"
+                          StaysOpenOnClick="True"
+                          Click="UnifiedBg_Click"/>
+                <MenuItem x:Name="NoBgMenuItem"
+                          Header="🫥 Sin fondo (Solo texto)"
+                          IsCheckable="True"
+                          IsChecked="False"
+                          StaysOpenOnClick="True"
+                          Click="NoBg_Click"/>
+            </MenuItem>
 
             <Separator/>
 
@@ -86,6 +114,25 @@
                 </MenuItem.Header>
             </MenuItem>
 
+            <!-- Slider de Separación entre indicadores -->
+            <MenuItem StaysOpenOnClick="True">
+                <MenuItem.Header>
+                    <StackPanel Width="190" Margin="0,2">
+                        <Grid Margin="0,0,0,4">
+                            <TextBlock Text="↔️ Separación" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="SpacingValueText" Text="8 px" HorizontalAlignment="Right" Foreground="#666"/>
+                        </Grid>
+                        <Slider x:Name="SpacingSlider"
+                                Minimum="0"
+                                Maximum="32"
+                                Value="8"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="True"
+                                ValueChanged="SpacingSlider_ValueChanged"/>
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+
             <Separator/>
 
             <MenuItem x:Name="TopmostMenuItem"
@@ -119,8 +166,15 @@
             <ScaleTransform x:Name="WidgetScaleTransform" ScaleX="1.0" ScaleY="1.0"/>
         </StackPanel.LayoutTransform>
 
-        <!-- Panel que alterna entre Vertical y Horizontal -->
-        <StackPanel x:Name="CardsPanel" Orientation="Vertical">
+        <!-- Contenedor único opcional que agrupa todos los indicadores -->
+        <Border x:Name="UnifiedContainer"
+                Background="Transparent"
+                BorderBrush="Transparent"
+                BorderThickness="0"
+                CornerRadius="12"
+                Padding="0">
+            <!-- Panel que alterna entre Vertical y Horizontal -->
+            <StackPanel x:Name="CardsPanel" Orientation="Vertical">
 
             <!-- Cajita 1: CPU -->
             <Border x:Name="CpuCard"
@@ -201,7 +255,47 @@
                 </Grid>
             </Border>
 
-            <!-- Cajita 3: FPS -->
+            <!-- Cajita 3: RAM -->
+            <Border x:Name="RamCard"
+                    Width="215"
+                    Margin="0,8,0,0"
+                    Background="#EE141720"
+                    BorderBrush="#38FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="12,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                        <TextBlock x:Name="RamTitleText" Text="RAM" Foreground="#CE93D8" FontSize="11" FontWeight="Bold"/>
+                        <TextBlock x:Name="RamUsageDetailText"
+                                   Text="-- / -- GB"
+                                   Foreground="#99AAB8"
+                                   FontSize="10"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="115"/>
+                        <TextBlock x:Name="RamPercentText"
+                                   Text="Uso: --%"
+                                   Foreground="#CED6E0"
+                                   FontSize="11"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="RamMainText"
+                               Grid.Column="1"
+                               Text="--%"
+                               Foreground="#00E676"
+                               FontSize="24"
+                               FontWeight="Bold"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <!-- Cajita 4: FPS -->
             <Border x:Name="FpsCard"
                     Width="215"
                     Margin="0,8,0,0"
@@ -240,7 +334,8 @@
                                VerticalAlignment="Center"/>
                 </Grid>
             </Border>
-        </StackPanel>
+            </StackPanel>
+        </Border>
 
         <!-- Botón de aviso si falta permiso de Administrador o driver PawnIO -->
         <Button x:Name="AdminWarningButton"

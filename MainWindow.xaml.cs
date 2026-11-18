@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using LibreHardwareMonitor.Hardware;
 using Microsoft.Win32;
@@ -20,7 +21,11 @@ public class WidgetSettings
     public double Scale { get; set; } = 1.0;
     public bool IsHorizontal { get; set; } = false;
     public bool MinimalistMode { get; set; } = false;
+    public bool ShowRam { get; set; } = true;
     public bool ShowFps { get; set; } = true;
+    public bool TransparentBackground { get; set; } = false;
+    public string? BackgroundMode { get; set; }
+    public double IndicatorSpacing { get; set; } = 8.0;
     public bool Topmost { get; set; } = true;
     public bool LockPosition { get; set; } = false;
     public bool StartWithWindows { get; set; } = true;
@@ -99,10 +104,32 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct MEMORYSTATUSEX
+    {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
     private static readonly SolidColorBrush GreenBrush = CreateFrozenBrush(0, 230, 118);
     private static readonly SolidColorBrush YellowBrush = CreateFrozenBrush(255, 179, 0);
     private static readonly SolidColorBrush RedBrush = CreateFrozenBrush(255, 82, 82);
     private static readonly SolidColorBrush MutedBrush = CreateFrozenBrush(150, 160, 175);
+    private static readonly SolidColorBrush CardBackgroundBrush = CreateFrozenBrush(0xEE, 0x14, 0x17, 0x20);
+    private static readonly SolidColorBrush CardBorderBrush = CreateFrozenBrush(0x38, 0xFF, 0xFF, 0xFF);
+    private static readonly SolidColorBrush InvisibleHitBrush = CreateFrozenBrush(0x01, 0x00, 0x00, 0x00);
+    private static readonly DropShadowEffect TextShadowEffect = CreateFrozenShadow();
 
     private readonly Computer _computer;
     private readonly UpdateVisitor _updateVisitor = new();
@@ -119,22 +146,40 @@ public partial class MainWindow : Window
     private WidgetSettings _settings = new();
     private string _cpuTitleLabel = "CPU";
     private string _gpuTitleLabel = "GPU";
+    private string _backgroundMode = "Individual";
     private bool _isInitializing = true;
     private bool _closedBySignal = false;
     private int _instanceCheckTick;
     private volatile bool _wasPawnIoInstalled;
     private volatile bool _isInstallingPawnIo;
+    private volatile bool _showRam = true;
     private volatile bool _showFps = true;
     private volatile bool _isDragging;
     private IntPtr _hwnd;
     private IntPtr _winEventHook;
     private WinEventDelegate? _winEventDelegate;
 
-    private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
+    private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b) =>
+        CreateFrozenBrush(255, r, g, b);
+
+    private static SolidColorBrush CreateFrozenBrush(byte a, byte r, byte g, byte b)
     {
-        var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+        var brush = new SolidColorBrush(Color.FromArgb(a, r, g, b));
         brush.Freeze();
         return brush;
+    }
+
+    private static DropShadowEffect CreateFrozenShadow()
+    {
+        var effect = new DropShadowEffect
+        {
+            Color = Colors.Black,
+            BlurRadius = 4,
+            ShadowDepth = 1,
+            Opacity = 0.90
+        };
+        effect.Freeze();
+        return effect;
     }
 
     public MainWindow()
@@ -371,16 +416,29 @@ public partial class MainWindow : Window
 
         OpacitySlider.Value = Math.Clamp(_settings.Opacity, 0.15, 1.0);
         ScaleSlider.Value = Math.Clamp(_settings.Scale, 0.50, 2.0);
+        SpacingSlider.Value = Math.Clamp(_settings.IndicatorSpacing, 0.0, 32.0);
         Topmost = _settings.Topmost;
         TopmostMenuItem.IsChecked = _settings.Topmost;
         LockPositionMenuItem.IsChecked = _settings.LockPosition;
         MinimalistMenuItem.IsChecked = _settings.MinimalistMode;
+        ShowRamMenuItem.IsChecked = _settings.ShowRam;
         ShowFpsMenuItem.IsChecked = _settings.ShowFps;
         StartWithWindowsMenuItem.IsChecked = _settings.StartWithWindows;
 
+        string initialBgMode = _settings.BackgroundMode switch
+        {
+            "Unified" => "Unified",
+            "None" => "None",
+            "Individual" => "Individual",
+            _ => _settings.TransparentBackground ? "None" : "Individual"
+        };
+
+        ApplyBackgroundMode(initialBgMode);
         ApplyMinimalistMode(_settings.MinimalistMode);
+        ApplyShowRam(_settings.ShowRam);
         ApplyShowFps(_settings.ShowFps, manageMonitor: false);
         ApplyOrientation(_settings.IsHorizontal);
+        ApplySpacing(SpacingSlider.Value);
         ApplyOpacity(OpacitySlider.Value);
         ApplyScale(ScaleSlider.Value);
     }
@@ -392,9 +450,13 @@ public partial class MainWindow : Window
         {
             _settings.Opacity = OpacitySlider.Value;
             _settings.Scale = ScaleSlider.Value;
+            _settings.IndicatorSpacing = SpacingSlider.Value;
             _settings.IsHorizontal = HorizontalLayoutMenuItem.IsChecked;
             _settings.MinimalistMode = MinimalistMenuItem.IsChecked;
+            _settings.ShowRam = ShowRamMenuItem.IsChecked;
             _settings.ShowFps = ShowFpsMenuItem.IsChecked;
+            _settings.BackgroundMode = _backgroundMode;
+            _settings.TransparentBackground = string.Equals(_backgroundMode, "None", StringComparison.Ordinal);
             _settings.Topmost = Topmost;
             _settings.LockPosition = LockPositionMenuItem.IsChecked;
             _settings.StartWithWindows = StartWithWindowsMenuItem.IsChecked;
@@ -610,6 +672,7 @@ public partial class MainWindow : Window
             _gpuTitleLabel = gpuTitle;
 
             FpsSnapshot? fpsSnapshot = _showFps ? _fpsMonitor.GetCurrentSnapshot() : null;
+            (double usedGb, double totalGb, double percent)? ramSnapshot = _showRam ? TryReadRamStatus() : null;
 
             _ = Dispatcher.InvokeAsync(() =>
             {
@@ -665,6 +728,11 @@ public partial class MainWindow : Window
                 {
                     GpuTempText.Text = "--°C";
                     GpuTempText.Foreground = MutedBrush;
+                }
+
+                if (_showRam)
+                {
+                    UpdateRamUi(ramSnapshot);
                 }
 
                 if (_showFps && fpsSnapshot.HasValue)
@@ -741,6 +809,82 @@ public partial class MainWindow : Window
         return RedBrush;
     }
 
+    private static SolidColorBrush GetRamBrush(double percent)
+    {
+        if (percent < 70) return GreenBrush;
+        if (percent < 85) return YellowBrush;
+        return RedBrush;
+    }
+
+    private static (double usedGb, double totalGb, double percent)? TryReadRamStatus()
+    {
+        try
+        {
+            MEMORYSTATUSEX mem = new()
+            {
+                dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>()
+            };
+            if (!GlobalMemoryStatusEx(ref mem) || mem.ullTotalPhys == 0)
+                return null;
+
+            const double bytesPerGb = 1024.0 * 1024.0 * 1024.0;
+            double totalGb = mem.ullTotalPhys / bytesPerGb;
+            double usedGb = (mem.ullTotalPhys - mem.ullAvailPhys) / bytesPerGb;
+            double percent = usedGb * 100.0 / totalGb;
+            return (usedGb, totalGb, percent);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void UpdateRamUi((double usedGb, double totalGb, double percent)? snapshot)
+    {
+        if (RamUsageDetailText == null || RamPercentText == null || RamMainText == null) return;
+
+        if (snapshot is { } ram)
+        {
+            double usedRounded = Math.Round(ram.usedGb, MidpointRounding.AwayFromZero);
+            double totalRounded = Math.Round(ram.totalGb, MidpointRounding.AwayFromZero);
+
+            RamUsageDetailText.Text = $"{usedRounded:0} / {totalRounded:0} GB";
+            RamPercentText.Text = $"Uso: {ram.percent:0}%";
+            RamMainText.Text = MinimalistMenuItem?.IsChecked == true
+                ? $"{usedRounded:0}/{totalRounded:0} GB"
+                : $"{ram.percent:0}%";
+            RamMainText.Foreground = GetRamBrush(ram.percent);
+        }
+        else
+        {
+            RamUsageDetailText.Text = "-- / -- GB";
+            RamPercentText.Text = "Uso: --%";
+            RamMainText.Text = MinimalistMenuItem?.IsChecked == true ? "--/-- GB" : "--%";
+            RamMainText.Foreground = MutedBrush;
+        }
+    }
+
+    // --- MOSTRAR / OCULTAR RAM ---
+    private void ShowRamMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyShowRam(ShowRamMenuItem.IsChecked);
+        SaveSettings();
+    }
+
+    private void ApplyShowRam(bool showRam)
+    {
+        _showRam = showRam;
+        if (RamCard != null)
+        {
+            RamCard.Visibility = showRam ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (showRam)
+        {
+            UpdateRamUi(TryReadRamStatus());
+        }
+    }
+
     // --- MOSTRAR / OCULTAR FPS ---
     private void ShowFpsMenuItem_Click(object sender, RoutedEventArgs e)
     {
@@ -775,6 +919,131 @@ public partial class MainWindow : Window
         }
     }
 
+    // --- ESTILO DE FONDO (INDIVIDUAL / BLOQUE ÚNICO / SIN FONDO) ---
+    private void IndividualBg_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyBackgroundMode("Individual");
+        SaveSettings();
+    }
+
+    private void UnifiedBg_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyBackgroundMode("Unified");
+        SaveSettings();
+    }
+
+    private void NoBg_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyBackgroundMode("None");
+        SaveSettings();
+    }
+
+    private void ApplyBackgroundMode(string mode)
+    {
+        _backgroundMode = mode;
+
+        if (IndividualBgMenuItem != null) IndividualBgMenuItem.IsChecked = mode == "Individual";
+        if (UnifiedBgMenuItem != null) UnifiedBgMenuItem.IsChecked = mode == "Unified";
+        if (NoBgMenuItem != null) NoBgMenuItem.IsChecked = mode == "None";
+
+        if (UnifiedContainer == null || CpuCard == null || GpuCard == null || RamCard == null || FpsCard == null || CardsPanel == null)
+            return;
+
+        if (mode == "Unified")
+        {
+            UnifiedContainer.Background = CardBackgroundBrush;
+            UnifiedContainer.BorderBrush = CardBorderBrush;
+            UnifiedContainer.BorderThickness = new Thickness(1);
+            UnifiedContainer.Padding = MinimalistMenuItem?.IsChecked == true
+                ? new Thickness(4, 2, 4, 2)
+                : new Thickness(4);
+
+            foreach (Border card in new[] { CpuCard, GpuCard, RamCard, FpsCard })
+            {
+                card.Background = Brushes.Transparent;
+                card.BorderBrush = Brushes.Transparent;
+                card.BorderThickness = new Thickness(0);
+            }
+
+            CardsPanel.Effect = null;
+        }
+        else if (mode == "None")
+        {
+            UnifiedContainer.Background = Brushes.Transparent;
+            UnifiedContainer.BorderBrush = Brushes.Transparent;
+            UnifiedContainer.BorderThickness = new Thickness(0);
+            UnifiedContainer.Padding = new Thickness(0);
+
+            foreach (Border card in new[] { CpuCard, GpuCard, RamCard, FpsCard })
+            {
+                card.Background = InvisibleHitBrush;
+                card.BorderBrush = Brushes.Transparent;
+                card.BorderThickness = new Thickness(0);
+            }
+
+            CardsPanel.Effect = TextShadowEffect;
+        }
+        else
+        {
+            UnifiedContainer.Background = Brushes.Transparent;
+            UnifiedContainer.BorderBrush = Brushes.Transparent;
+            UnifiedContainer.BorderThickness = new Thickness(0);
+            UnifiedContainer.Padding = new Thickness(0);
+
+            foreach (Border card in new[] { CpuCard, GpuCard, RamCard, FpsCard })
+            {
+                card.Background = CardBackgroundBrush;
+                card.BorderBrush = CardBorderBrush;
+                card.BorderThickness = new Thickness(1);
+            }
+
+            CardsPanel.Effect = null;
+        }
+
+        UpdateMinimalistCardSizing(MinimalistMenuItem?.IsChecked == true);
+    }
+
+    private void UpdateMinimalistCardSizing(bool isMinimalist)
+    {
+        if (CpuCard == null || GpuCard == null || RamCard == null || FpsCard == null) return;
+
+        if (isMinimalist)
+        {
+            bool individual = _backgroundMode == "Individual";
+            CpuCard.Width = double.NaN;
+            GpuCard.Width = double.NaN;
+            RamCard.Width = double.NaN;
+            FpsCard.Width = double.NaN;
+            CpuCard.MinWidth = individual ? 120 : 0;
+            GpuCard.MinWidth = individual ? 120 : 0;
+            RamCard.MinWidth = individual ? 120 : 0;
+            FpsCard.MinWidth = individual ? 120 : 0;
+            Thickness padding = individual ? new Thickness(12, 6, 12, 6) : new Thickness(8, 6, 8, 6);
+            CpuCard.Padding = padding;
+            GpuCard.Padding = padding;
+            RamCard.Padding = padding;
+            FpsCard.Padding = padding;
+            if (RamMainText != null) RamMainText.FontSize = 24;
+        }
+        else
+        {
+            CpuCard.Width = 215;
+            GpuCard.Width = 215;
+            RamCard.Width = 215;
+            FpsCard.Width = 215;
+            CpuCard.MinWidth = 0;
+            GpuCard.MinWidth = 0;
+            RamCard.MinWidth = 0;
+            FpsCard.MinWidth = 0;
+            Thickness padding = new(12, 10, 12, 10);
+            CpuCard.Padding = padding;
+            GpuCard.Padding = padding;
+            RamCard.Padding = padding;
+            FpsCard.Padding = padding;
+            if (RamMainText != null) RamMainText.FontSize = 24;
+        }
+    }
+
     // --- MODO MINIMALISTA ---
     private void MinimalistMenuItem_Click(object sender, RoutedEventArgs e)
     {
@@ -784,59 +1053,58 @@ public partial class MainWindow : Window
 
     private void ApplyMinimalistMode(bool isMinimalist)
     {
-        if (CpuTitleText == null || GpuTitleText == null || FpsTitleText == null) return;
+        if (CpuTitleText == null || GpuTitleText == null || RamTitleText == null || FpsTitleText == null) return;
 
         if (isMinimalist)
         {
             CpuTitleText.Text = "CPU";
             GpuTitleText.Text = "GPU";
+            RamTitleText.Text = "RAM";
             FpsTitleText.Text = "FPS";
-            CpuTitleText.FontSize = 15;
-            GpuTitleText.FontSize = 15;
-            FpsTitleText.FontSize = 15;
+            CpuTitleText.FontSize = 24;
+            GpuTitleText.FontSize = 24;
+            RamTitleText.FontSize = 24;
+            FpsTitleText.FontSize = 24;
 
             CpuNameText.Visibility = Visibility.Collapsed;
             CpuLoadText.Visibility = Visibility.Collapsed;
             GpuNameText.Visibility = Visibility.Collapsed;
             GpuLoadText.Visibility = Visibility.Collapsed;
+            RamUsageDetailText.Visibility = Visibility.Collapsed;
+            RamPercentText.Visibility = Visibility.Collapsed;
             FpsAppText.Visibility = Visibility.Collapsed;
             FpsFrameTimeText.Visibility = Visibility.Collapsed;
-
-            CpuCard.Width = double.NaN;
-            GpuCard.Width = double.NaN;
-            FpsCard.Width = double.NaN;
-            CpuCard.MinWidth = 120;
-            GpuCard.MinWidth = 120;
-            FpsCard.MinWidth = 120;
-            CpuCard.Padding = new Thickness(12, 6, 12, 6);
-            GpuCard.Padding = new Thickness(12, 6, 12, 6);
-            FpsCard.Padding = new Thickness(12, 6, 12, 6);
         }
         else
         {
             CpuTitleText.Text = _cpuTitleLabel;
             GpuTitleText.Text = _gpuTitleLabel;
+            RamTitleText.Text = "RAM";
             FpsTitleText.Text = "FPS (VENTANA)";
             CpuTitleText.FontSize = 11;
             GpuTitleText.FontSize = 11;
+            RamTitleText.FontSize = 11;
             FpsTitleText.FontSize = 11;
 
             CpuNameText.Visibility = Visibility.Visible;
             CpuLoadText.Visibility = Visibility.Visible;
             GpuNameText.Visibility = Visibility.Visible;
             GpuLoadText.Visibility = Visibility.Visible;
+            RamUsageDetailText.Visibility = Visibility.Visible;
+            RamPercentText.Visibility = Visibility.Visible;
             FpsAppText.Visibility = Visibility.Visible;
             FpsFrameTimeText.Visibility = Visibility.Visible;
+        }
 
-            CpuCard.Width = 215;
-            GpuCard.Width = 215;
-            FpsCard.Width = 215;
-            CpuCard.MinWidth = 0;
-            GpuCard.MinWidth = 0;
-            FpsCard.MinWidth = 0;
-            CpuCard.Padding = new Thickness(12, 10, 12, 10);
-            GpuCard.Padding = new Thickness(12, 10, 12, 10);
-            FpsCard.Padding = new Thickness(12, 10, 12, 10);
+        if (UnifiedContainer != null && _backgroundMode == "Unified")
+        {
+            UnifiedContainer.Padding = isMinimalist ? new Thickness(4, 2, 4, 2) : new Thickness(4);
+        }
+
+        UpdateMinimalistCardSizing(isMinimalist);
+        if (_showRam)
+        {
+            UpdateRamUi(TryReadRamStatus());
         }
     }
 
@@ -871,6 +1139,34 @@ public partial class MainWindow : Window
             ScaleValueText.Text = $"{scale * 100:0}%";
     }
 
+    // --- SEPARACIÓN ENTRE INDICADORES (SLIDER) ---
+    private void SpacingSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        ApplySpacing(e.NewValue);
+        SaveSettings();
+    }
+
+    private void ApplySpacing(double spacing)
+    {
+        if (SpacingValueText != null)
+            SpacingValueText.Text = $"{spacing:0} px";
+        UpdateCardMargins();
+    }
+
+    private void UpdateCardMargins()
+    {
+        if (GpuCard == null || RamCard == null || FpsCard == null || SpacingSlider == null) return;
+        double spacing = SpacingSlider.Value;
+        bool isHorizontal = HorizontalLayoutMenuItem?.IsChecked == true;
+        Thickness margin = isHorizontal
+            ? new Thickness(spacing, 0, 0, 0)
+            : new Thickness(0, spacing, 0, 0);
+
+        GpuCard.Margin = margin;
+        RamCard.Margin = margin;
+        FpsCard.Margin = margin;
+    }
+
     // --- ORIENTACIÓN (VERTICAL / HORIZONTAL) ---
     private void VerticalLayout_Click(object sender, RoutedEventArgs e)
     {
@@ -891,19 +1187,17 @@ public partial class MainWindow : Window
         if (isHorizontal)
         {
             CardsPanel.Orientation = Orientation.Horizontal;
-            GpuCard.Margin = new Thickness(8, 0, 0, 0);
-            FpsCard.Margin = new Thickness(8, 0, 0, 0);
             HorizontalLayoutMenuItem.IsChecked = true;
             VerticalLayoutMenuItem.IsChecked = false;
         }
         else
         {
             CardsPanel.Orientation = Orientation.Vertical;
-            GpuCard.Margin = new Thickness(0, 8, 0, 0);
-            FpsCard.Margin = new Thickness(0, 8, 0, 0);
             VerticalLayoutMenuItem.IsChecked = true;
             HorizontalLayoutMenuItem.IsChecked = false;
         }
+
+        UpdateCardMargins();
     }
 
     private async void ActionWarningButton_Click(object sender, RoutedEventArgs e)
