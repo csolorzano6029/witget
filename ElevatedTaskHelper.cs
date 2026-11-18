@@ -26,7 +26,7 @@ internal static class ElevatedTaskHelper
     {
         string current = AppContext.BaseDirectory;
         DirectoryInfo? dir = new DirectoryInfo(current);
-        for (int i = 0; i < 4 && dir != null; i++)
+        for (int i = 0; i < 7 && dir != null; i++)
         {
             if (File.Exists(Path.Combine(dir.FullName, "HardwareWidget.csproj")) ||
                 File.Exists(Path.Combine(dir.FullName, "widget_settings.json")))

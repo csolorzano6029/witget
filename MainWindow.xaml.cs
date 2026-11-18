@@ -642,24 +642,33 @@ public partial class MainWindow : Window
                         gpuName = CleanHardwareName(hardware.Name);
                         gpuTemp = null;
                         gpuLoad = null;
+                        int gpuTempPriority = 0;
+                        int gpuLoadPriority = 0;
 
                         foreach (ISensor sensor in hardware.Sensors)
                         {
                             if (sensor.SensorType == SensorType.Temperature && sensor.Value.HasValue)
                             {
-                                if (sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
-                                    sensor.Name.Contains("Hot Spot", StringComparison.OrdinalIgnoreCase) ||
-                                    gpuTemp == null)
+                                int tempPriority =
+                                    sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ? 4 :
+                                    sensor.Name.Contains("Edge", StringComparison.OrdinalIgnoreCase) ? 3 :
+                                    !sensor.Name.Contains("Hot Spot", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
+
+                                if (tempPriority > gpuTempPriority)
                                 {
+                                    gpuTempPriority = tempPriority;
                                     gpuTemp = sensor.Value.Value;
                                 }
                             }
                             else if (sensor.SensorType == SensorType.Load && sensor.Value.HasValue)
                             {
-                                if (sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
-                                    sensor.Name.Contains("D3D 3D", StringComparison.OrdinalIgnoreCase) ||
-                                    gpuLoad == null)
+                                int loadPriority =
+                                    sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ? 3 :
+                                    sensor.Name.Contains("D3D 3D", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
+
+                                if (loadPriority > gpuLoadPriority)
                                 {
+                                    gpuLoadPriority = loadPriority;
                                     gpuLoad = sensor.Value.Value;
                                 }
                             }
