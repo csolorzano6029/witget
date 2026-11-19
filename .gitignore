@@ -19,6 +19,8 @@ publish/
 active_instance.txt
 close.signal
 widget_settings.json
+weather_settings.json
+perf_settings.json
 error.log
 fps_error.log
 *.log

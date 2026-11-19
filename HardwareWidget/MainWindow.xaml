@@ -145,6 +145,11 @@
                       IsCheckable="True"
                       IsChecked="False"
                       Click="LockPositionMenuItem_Click"/>
+            <MenuItem x:Name="ClickThroughMenuItem"
+                      Header="🎮 Ignorar clics siempre (Alt para menú)"
+                      IsCheckable="True"
+                      IsChecked="False"
+                      Click="ClickThroughMenuItem_Click"/>
             <MenuItem x:Name="StartWithWindowsMenuItem"
                       Header="🚀 Iniciar con Windows"
                       IsCheckable="True"
@@ -156,6 +161,7 @@
 
             <Separator/>
 
+            <MenuItem Header="👁️ Ocultar / Mostrar (Ctrl+Shift+H)" Click="ToggleVisibilityMenuItem_Click"/>
             <MenuItem Header="❌ Cerrar Widget" Click="CloseMenuItem_Click"/>
         </ContextMenu>
     </Window.ContextMenu>
@@ -208,6 +214,8 @@
                     <TextBlock x:Name="CpuTempText"
                                Grid.Column="1"
                                Text="--°C"
+                               MinWidth="60"
+                               TextAlignment="Right"
                                Foreground="#00E676"
                                FontSize="24"
                                FontWeight="Bold"
@@ -248,6 +256,8 @@
                     <TextBlock x:Name="GpuTempText"
                                Grid.Column="1"
                                Text="--°C"
+                               MinWidth="60"
+                               TextAlignment="Right"
                                Foreground="#00E676"
                                FontSize="24"
                                FontWeight="Bold"
@@ -328,6 +338,8 @@
                     <TextBlock x:Name="FpsValueText"
                                Grid.Column="1"
                                Text="--"
+                               Width="52"
+                               TextAlignment="Right"
                                Foreground="#96A0AF"
                                FontSize="24"
                                FontWeight="Bold"

@@ -1,0 +1,353 @@
+<Window x:Class="WeatherWidget.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Clima Widget (Windows 11)"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="Manual"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="False"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown"
+        Loaded="Window_Loaded"
+        Closing="Window_Closing"
+        Closed="Window_Closed">
+
+    <Window.Resources>
+        <Style x:Key="GhostButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#DCE3EC"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="BtnBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="BtnBorder" Property="Background" Value="#24FFFFFF"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="BtnBorder" Property="Background" Value="#36FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="LinkButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#DCE3EC"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <TextBlock x:Name="LinkText"
+                                   Text="{TemplateBinding Content}"
+                                   Foreground="{TemplateBinding Foreground}"
+                                   FontSize="{TemplateBinding FontSize}"
+                                   FontWeight="{TemplateBinding FontWeight}"
+                                   HorizontalAlignment="Center"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                                <Setter TargetName="LinkText" Property="TextDecorations" Value="Underline"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Window.ContextMenu>
+        <ContextMenu x:Name="WidgetContextMenu" MinWidth="230">
+            <MenuItem Header="🔄 Actualizar clima ahora" Click="RefreshMenuItem_Click"/>
+            <MenuItem Header="📍 Cambiar ciudad..." Click="ChangeCityMenuItem_Click"/>
+            <MenuItem Header="🛰️ Usar ubicación automática" Click="AutoLocationMenuItem_Click"/>
+
+            <Separator/>
+
+            <MenuItem Header="🌡️ Unidad de temperatura">
+                <MenuItem x:Name="CelsiusMenuItem"
+                          Header="°C (Celsius)"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          Click="CelsiusMenuItem_Click"/>
+                <MenuItem x:Name="FahrenheitMenuItem"
+                          Header="°F (Fahrenheit)"
+                          IsCheckable="True"
+                          IsChecked="False"
+                          Click="FahrenheitMenuItem_Click"/>
+            </MenuItem>
+
+            <Separator/>
+
+            <!-- Slider de Opacidad -->
+            <MenuItem StaysOpenOnClick="True">
+                <MenuItem.Header>
+                    <StackPanel Width="190" Margin="0,2">
+                        <Grid Margin="0,0,0,4">
+                            <TextBlock Text="🔆 Opacidad" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="OpacityValueText" Text="92%" HorizontalAlignment="Right" Foreground="#666"/>
+                        </Grid>
+                        <Slider x:Name="OpacitySlider"
+                                Minimum="0.25"
+                                Maximum="1.0"
+                                Value="0.92"
+                                TickFrequency="0.05"
+                                ValueChanged="OpacitySlider_ValueChanged"/>
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+
+            <!-- Slider de Escala -->
+            <MenuItem StaysOpenOnClick="True">
+                <MenuItem.Header>
+                    <StackPanel Width="190" Margin="0,2">
+                        <Grid Margin="0,0,0,4">
+                            <TextBlock Text="🔍 Tamaño" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="ScaleValueText" Text="100%" HorizontalAlignment="Right" Foreground="#666"/>
+                        </Grid>
+                        <Slider x:Name="ScaleSlider"
+                                Minimum="0.60"
+                                Maximum="1.60"
+                                Value="1.0"
+                                TickFrequency="0.05"
+                                ValueChanged="ScaleSlider_ValueChanged"/>
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+
+            <Separator/>
+
+            <MenuItem x:Name="TopmostMenuItem"
+                      Header="📌 Siempre encima (Topmost)"
+                      IsCheckable="True"
+                      IsChecked="False"
+                      Click="TopmostMenuItem_Click"/>
+            <MenuItem x:Name="LockPositionMenuItem"
+                      Header="🔒 Bloquear posición"
+                      IsCheckable="True"
+                      IsChecked="False"
+                      Click="LockPositionMenuItem_Click"/>
+            <MenuItem x:Name="StartWithWindowsMenuItem"
+                      Header="🚀 Iniciar con Windows"
+                      IsCheckable="True"
+                      IsChecked="True"
+                      Click="StartWithWindowsMenuItem_Click"/>
+
+            <Separator/>
+
+            <MenuItem Header="🌐 Abrir en MSN Clima" Click="OpenMsnWeather_Click"/>
+            <MenuItem Header="❌ Cerrar Widget" Click="CloseMenuItem_Click"/>
+        </ContextMenu>
+    </Window.ContextMenu>
+
+    <!-- Margen exterior para la sombra suave estilo Windows 11 -->
+    <Grid x:Name="RootContainer" Margin="10" Background="Transparent">
+        <Grid.LayoutTransform>
+            <ScaleTransform x:Name="WidgetScaleTransform" ScaleX="1.0" ScaleY="1.0"/>
+        </Grid.LayoutTransform>
+
+        <Border x:Name="CardBorder"
+                Width="328"
+                CornerRadius="12"
+                BorderBrush="#36FFFFFF"
+                BorderThickness="1"
+                Padding="16,12,16,11">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop Color="#E03B424C" Offset="0.0"/>
+                    <GradientStop Color="#E02B3038" Offset="1.0"/>
+                </LinearGradientBrush>
+            </Border.Background>
+            <Border.Effect>
+                <DropShadowEffect Color="#000000" BlurRadius="16" ShadowDepth="4" Opacity="0.45"/>
+            </Border.Effect>
+
+            <StackPanel>
+                <!-- Fila superior: Ciudad + botón ••• -->
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock x:Name="CityText"
+                               Grid.Column="0"
+                               Text="Detectando..."
+                               Foreground="#F5F7FA"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+
+                    <Button x:Name="MoreButton"
+                            Grid.Column="1"
+                            Style="{StaticResource GhostButtonStyle}"
+                            Padding="6,0"
+                            Height="24"
+                            Click="MoreButton_Click"
+                            ToolTip="Opciones">
+                        <TextBlock Text="•••" FontSize="12" FontWeight="Bold" Foreground="#E8EEF5" VerticalAlignment="Center"/>
+                    </Button>
+                </Grid>
+
+                <!-- Buscador rápido de ciudad (solo visible cuando se elige Cambiar ciudad) -->
+                <Border x:Name="CitySearchPanel"
+                        Visibility="Collapsed"
+                        Background="#28000000"
+                        BorderBrush="#2EFFFFFF"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="6"
+                        Margin="0,0,0,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBox x:Name="CityInputBox"
+                                 Grid.Column="0"
+                                 Background="#33000000"
+                                 Foreground="White"
+                                 CaretBrush="White"
+                                 BorderBrush="#3AFFFFFF"
+                                 BorderThickness="1"
+                                 Padding="6,3"
+                                 FontSize="12"
+                                 VerticalContentAlignment="Center"
+                                 KeyDown="CityInputBox_KeyDown"/>
+
+                        <Button Grid.Column="1"
+                                Content="Buscar"
+                                Style="{StaticResource GhostButtonStyle}"
+                                Background="#334FC3F7"
+                                Margin="6,0,0,0"
+                                Padding="8,3"
+                                FontSize="11.5"
+                                Click="ApplyCityButton_Click"/>
+
+                        <Button Grid.Column="2"
+                                Content="✕"
+                                Style="{StaticResource GhostButtonStyle}"
+                                Margin="4,0,0,0"
+                                Padding="6,3"
+                                FontSize="11.5"
+                                Click="CancelCityButton_Click"/>
+                    </Grid>
+                </Border>
+
+                <!-- Fila central: Ícono + Temperatura + Resumen alineado a la derecha -->
+                <Grid Margin="0,2,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Border x:Name="IconHost"
+                            Grid.Column="0"
+                            Width="56"
+                            Height="56"
+                            VerticalAlignment="Center"/>
+
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                Margin="10,0,12,0"
+                                VerticalAlignment="Center">
+                        <TextBlock x:Name="TempValueText"
+                                   Text="--"
+                                   Foreground="#FFFFFF"
+                                   FontSize="32"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TempUnitText"
+                                   Text="°C"
+                                   Foreground="#EEF2F6"
+                                   FontSize="15"
+                                   FontWeight="SemiBold"
+                                   Margin="2,5,0,0"
+                                   VerticalAlignment="Top"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="SummaryText"
+                               Grid.Column="2"
+                               Text="Cargando clima..."
+                               Foreground="#F0F4F8"
+                               FontSize="12.5"
+                               FontWeight="SemiBold"
+                               TextAlignment="Right"
+                               TextWrapping="Wrap"
+                               LineHeight="17"
+                               VerticalAlignment="Center"/>
+                </Grid>
+
+                <!-- Enlace inferior centrado estilo Windows 11 -->
+                <Button x:Name="ForecastToggleButton"
+                        Style="{StaticResource LinkButtonStyle}"
+                        Content="Ver pronóstico completo"
+                        FontSize="11.5"
+                        FontWeight="Normal"
+                        HorizontalAlignment="Center"
+                        Click="ForecastToggleButton_Click"/>
+
+                <!-- Panel expandible de pronóstico completo -->
+                <StackPanel x:Name="FullForecastPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                    <Border Height="1" Background="#28FFFFFF" Margin="0,0,0,10"/>
+
+                    <!-- Métricas actuales -->
+                    <UniformGrid Columns="3" Margin="0,0,0,10">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="Sensación" Foreground="#A8B5C4" FontSize="10.5" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="FeelsLikeText" Text="--°" Foreground="#F3F6FA" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="Humedad" Foreground="#A8B5C4" FontSize="10.5" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="HumidityText" Text="--%" Foreground="#F3F6FA" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="Viento" Foreground="#A8B5C4" FontSize="10.5" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="WindText" Text="-- km/h" Foreground="#F3F6FA" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </UniformGrid>
+
+                    <!-- Próximas horas -->
+                    <TextBlock Text="Próximas horas" Foreground="#B8C4D2" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <UniformGrid x:Name="HourlyGrid" Columns="6" Margin="0,0,0,10"/>
+
+                    <!-- Próximos 5 días -->
+                    <TextBlock Text="Próximos días" Foreground="#B8C4D2" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <StackPanel x:Name="DailyStack"/>
+
+                    <Grid Margin="0,8,0,0">
+                        <TextBlock x:Name="UpdatedAtText"
+                                   Text=""
+                                   Foreground="#8F9DAC"
+                                   FontSize="10"
+                                   VerticalAlignment="Center"/>
+                        <Button Style="{StaticResource LinkButtonStyle}"
+                                Content="Abrir en MSN Clima ↗"
+                                FontSize="10.5"
+                                HorizontalAlignment="Right"
+                                Click="OpenMsnWeather_Click"/>
+                    </Grid>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

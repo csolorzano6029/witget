@@ -28,6 +28,7 @@ public class WidgetSettings
     public double IndicatorSpacing { get; set; } = 8.0;
     public bool Topmost { get; set; } = true;
     public bool LockPosition { get; set; } = false;
+    public bool ClickThrough { get; set; } = false;
     public bool StartWithWindows { get; set; } = true;
     public double? Left { get; set; }
     public double? Top { get; set; }
@@ -62,7 +63,35 @@ public partial class MainWindow : Window
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
     private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TRANSPARENT = 0x00000020;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const int WS_EX_NOACTIVATE = 0x08000000;
+    private const int VK_MENU = 0x12;
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const int WM_HOTKEY = 0x0312;
+    private const int HOTKEY_TOGGLE_ID = 0x5101;
+    private const uint MOD_CONTROL = 0x0002;
+    private const uint MOD_SHIFT = 0x0004;
+    private const uint MOD_NOREPEAT = 0x4000;
+    private const uint VK_H = 0x48;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public uint cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
 
     private delegate void WinEventDelegate(
         IntPtr hWinEventHook,
@@ -103,6 +132,27 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     private struct MEMORYSTATUSEX
@@ -149,6 +199,9 @@ public partial class MainWindow : Window
     private string _backgroundMode = "Individual";
     private bool _isInitializing = true;
     private bool _closedBySignal = false;
+    private bool _isClickThroughApplied = false;
+    private volatile bool _isHiddenByHotkey = false;
+    private HwndSource? _hwndSource;
     private int _instanceCheckTick;
     private volatile bool _wasPawnIoInstalled;
     private volatile bool _isInstallingPawnIo;
@@ -233,9 +286,14 @@ public partial class MainWindow : Window
                 }
             }
 
-            if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && IsTaskbarAboveWidget())
+            if (!_isHiddenByHotkey)
             {
-                ForceAboveTaskbar();
+                UpdateClickThroughState();
+
+                if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && IsTaskbarAboveWidget())
+                {
+                    ForceAboveTaskbar();
+                }
             }
         };
 
@@ -273,8 +331,13 @@ public partial class MainWindow : Window
         if (_hwnd != IntPtr.Zero)
         {
             int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
-            SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
+            SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
             ForceAboveTaskbar();
+            UpdateClickThroughState();
+
+            _hwndSource = HwndSource.FromHwnd(_hwnd);
+            _hwndSource?.AddHook(WndProc);
+            RegisterHotKey(_hwnd, HOTKEY_TOGGLE_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_H);
 
             _winEventDelegate = OnWinEvent;
             _winEventHook = SetWinEventHook(
@@ -288,6 +351,89 @@ public partial class MainWindow : Window
         }
     }
 
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_TOGGLE_ID)
+        {
+            ToggleWidgetVisibility();
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    private void ToggleWidgetVisibility()
+    {
+        if (_isHiddenByHotkey || Visibility != Visibility.Visible)
+        {
+            _isHiddenByHotkey = false;
+            Show();
+            ForceAboveTaskbar();
+            UpdateClickThroughState();
+        }
+        else
+        {
+            _isHiddenByHotkey = true;
+            if (WidgetContextMenu.IsOpen) WidgetContextMenu.IsOpen = false;
+            Hide();
+        }
+    }
+
+    private void ToggleVisibilityMenuItem_Click(object sender, RoutedEventArgs e) => ToggleWidgetVisibility();
+
+    private void UpdateClickThroughState()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+
+        bool altPressed = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+        bool manualClickThrough = ClickThroughMenuItem?.IsChecked == true;
+        bool shouldPassThrough = !_isDragging &&
+                                 !WidgetContextMenu.IsOpen &&
+                                 !altPressed &&
+                                 (manualClickThrough || IsForegroundFullscreenOrBorderless());
+
+        if (shouldPassThrough == _isClickThroughApplied) return;
+
+        int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+        int newStyle = shouldPassThrough
+            ? (exStyle | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
+            : ((exStyle & ~WS_EX_TRANSPARENT) | WS_EX_NOACTIVATE);
+
+        SetWindowLong(_hwnd, GWL_EXSTYLE, newStyle);
+        _isClickThroughApplied = shouldPassThrough;
+    }
+
+    private bool IsForegroundFullscreenOrBorderless()
+    {
+        IntPtr fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == _hwnd) return false;
+
+        int len = GetClassName(fg, _classNameBuffer, _classNameBuffer.Length);
+        if (len > 0)
+        {
+            ReadOnlySpan<char> cls = _classNameBuffer.AsSpan(0, len);
+            if (cls.Equals("Progman", StringComparison.Ordinal) ||
+                cls.Equals("WorkerW", StringComparison.Ordinal) ||
+                cls.Equals("Shell_TrayWnd", StringComparison.Ordinal) ||
+                cls.Equals("Shell_SecondaryTrayWnd", StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        if (!GetWindowRect(fg, out RECT winRect)) return false;
+
+        IntPtr monitor = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+        if (monitor == IntPtr.Zero) return false;
+
+        MONITORINFO mi = new() { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(monitor, ref mi)) return false;
+
+        return winRect.Left <= mi.rcMonitor.Left + 2 &&
+               winRect.Top <= mi.rcMonitor.Top + 2 &&
+               winRect.Right >= mi.rcMonitor.Right - 2 &&
+               winRect.Bottom >= mi.rcMonitor.Bottom - 2;
+    }
+
     private void OnWinEvent(
         IntPtr hWinEventHook,
         uint eventType,
@@ -297,6 +443,13 @@ public partial class MainWindow : Window
         uint dwEventThread,
         uint dwmsEventTime)
     {
+        if (_isHiddenByHotkey) return;
+
+        if (eventType == EVENT_SYSTEM_FOREGROUND)
+        {
+            UpdateClickThroughState();
+        }
+
         if (!Topmost || _isDragging || _closedBySignal || WidgetContextMenu.IsOpen || _hwnd == IntPtr.Zero)
         {
             return;
@@ -420,6 +573,7 @@ public partial class MainWindow : Window
         Topmost = _settings.Topmost;
         TopmostMenuItem.IsChecked = _settings.Topmost;
         LockPositionMenuItem.IsChecked = _settings.LockPosition;
+        ClickThroughMenuItem.IsChecked = _settings.ClickThrough;
         MinimalistMenuItem.IsChecked = _settings.MinimalistMode;
         ShowRamMenuItem.IsChecked = _settings.ShowRam;
         ShowFpsMenuItem.IsChecked = _settings.ShowFps;
@@ -459,6 +613,7 @@ public partial class MainWindow : Window
             _settings.TransparentBackground = string.Equals(_backgroundMode, "None", StringComparison.Ordinal);
             _settings.Topmost = Topmost;
             _settings.LockPosition = LockPositionMenuItem.IsChecked;
+            _settings.ClickThrough = ClickThroughMenuItem.IsChecked;
             _settings.StartWithWindows = StartWithWindowsMenuItem.IsChecked;
             _settings.Left = Left;
             _settings.Top = Top;
@@ -1334,6 +1489,12 @@ public partial class MainWindow : Window
 
     private void LockPositionMenuItem_Click(object sender, RoutedEventArgs e) => SaveSettings();
 
+    private void ClickThroughMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateClickThroughState();
+        SaveSettings();
+    }
+
     private void CloseMenuItem_Click(object sender, RoutedEventArgs e)
     {
         SaveSettings();
@@ -1348,6 +1509,12 @@ public partial class MainWindow : Window
     private void Window_Closed(object sender, EventArgs e)
     {
         _topmostTimer.Stop();
+        if (_hwnd != IntPtr.Zero)
+        {
+            UnregisterHotKey(_hwnd, HOTKEY_TOGGLE_ID);
+        }
+        _hwndSource?.RemoveHook(WndProc);
+        _hwndSource = null;
         if (_winEventHook != IntPtr.Zero)
         {
             UnhookWinEvent(_winEventHook);
