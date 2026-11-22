@@ -24,6 +24,7 @@ public class PerfWidgetSettings
     public bool ShowGpu { get; set; } = true;
     public bool ShowRam { get; set; } = true;
     public bool ShowFps { get; set; } = true;
+    public bool ShowPing { get; set; } = true;
     public bool ShowNetwork { get; set; } = true;
     public bool ShowActionButtons { get; set; } = false;
     public double Opacity { get; set; } = 0.94;
@@ -117,6 +118,24 @@ public partial class MainWindow : Window
     private static readonly Color GpuLineColor = Color.FromRgb(92, 230, 109);
     private static readonly Color RamLineColor = Color.FromRgb(88, 184, 255);
     private static readonly Color NetLineColor = Color.FromRgb(229, 169, 92);
+    private static readonly SolidColorBrush PingGoodBrush = CreateFrozenBrush(76, 175, 80);
+    private static readonly SolidColorBrush PingWarnBrush = CreateFrozenBrush(255, 193, 7);
+    private static readonly SolidColorBrush PingBadBrush = CreateFrozenBrush(244, 67, 54);
+    private static readonly SolidColorBrush PingMutedBrush = CreateFrozenBrush(168, 183, 200);
+
+    private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
+    {
+        SolidColorBrush brush = new(Color.FromRgb(r, g, b));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static SolidColorBrush GetPingBrush(int pingMs)
+    {
+        if (pingMs < 60) return PingGoodBrush;
+        if (pingMs < 120) return PingWarnBrush;
+        return PingBadBrush;
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -194,6 +213,7 @@ public partial class MainWindow : Window
     private readonly Computer _computer;
     private readonly UpdateVisitor _updateVisitor = new();
     private readonly FpsMonitor _fpsMonitor = new();
+    private readonly GamePingMonitor _pingMonitor = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly DispatcherTimer _instanceTimer;
     private readonly bool _isAdmin;
@@ -233,6 +253,8 @@ public partial class MainWindow : Window
     private volatile bool _wasPawnIoInstalled;
     private volatile bool _isInstallingPawnIo;
     private volatile bool _showFps = true;
+    private volatile bool _showPing = true;
+    private bool _hasActiveGamePing = false;
 
     public MainWindow()
     {
@@ -587,6 +609,7 @@ public partial class MainWindow : Window
         ShowGpuMenuItem.IsChecked = _settings.ShowGpu;
         ShowRamMenuItem.IsChecked = _settings.ShowRam;
         ShowFpsMenuItem.IsChecked = _settings.ShowFps;
+        ShowPingMenuItem.IsChecked = _settings.ShowPing;
         ShowNetworkMenuItem.IsChecked = _settings.ShowNetwork;
         ShowActionButtonsMenuItem.IsChecked = _settings.ShowActionButtons;
         Topmost = _settings.Topmost;
@@ -614,6 +637,7 @@ public partial class MainWindow : Window
             _settings.ShowGpu = ShowGpuMenuItem.IsChecked;
             _settings.ShowRam = ShowRamMenuItem.IsChecked;
             _settings.ShowFps = ShowFpsMenuItem.IsChecked;
+            _settings.ShowPing = ShowPingMenuItem.IsChecked;
             _settings.ShowNetwork = ShowNetworkMenuItem.IsChecked;
             _settings.ShowActionButtons = ShowActionButtonsMenuItem.IsChecked;
             _settings.Opacity = OpacitySlider.Value;
@@ -665,7 +689,7 @@ public partial class MainWindow : Window
         }
 
         _instanceTimer.Start();
-        if (_showFps)
+        if (_showFps || _showPing)
         {
             _fpsMonitor.Start();
         }
@@ -850,7 +874,12 @@ public partial class MainWindow : Window
 
             var ram = TryReadRamStatus();
             var net = ReadNetworkSpeeds();
-            FpsSnapshot fps = _showFps ? _fpsMonitor.GetCurrentSnapshot() : new FpsSnapshot(null, null, "En espera", false);
+            FpsSnapshot fps = (_showFps || _showPing)
+                ? _fpsMonitor.GetCurrentSnapshot()
+                : new FpsSnapshot(null, null, "En espera", 0, null, false);
+            GamePingSnapshot? ping = _showPing
+                ? _pingMonitor.GetSnapshot(fps.ActivePid, fps.AppName, fps.UdpRemoteAddr)
+                : null;
 
             _ = Dispatcher.InvokeAsync(() =>
             {
@@ -926,6 +955,38 @@ public partial class MainWindow : Window
                     FpsMinMaxText.Text = _fpsHistory.Count > 0
                         ? $"Min: {_fpsHistory.Min(x => x.Fps):0} / Max: {_fpsHistory.Max(x => x.Fps):0}"
                         : "Min: -- / Max: --";
+                }
+
+                // Ping (Juego) - solo visible si hay juego activo
+                bool activeGamePing = _showPing && ping.HasValue && ping.Value.HasActiveGame;
+                if (activeGamePing != _hasActiveGamePing)
+                {
+                    _hasActiveGamePing = activeGamePing;
+                    UpdateBottomCardLayout();
+                }
+
+                if (activeGamePing && ping.HasValue)
+                {
+                    PingGameText.Text = ping.Value.GameName;
+                    PingServerText.Text = string.IsNullOrEmpty(ping.Value.ServerIp)
+                        ? "Servidor: --"
+                        : $"IP: {ping.Value.ServerIp}";
+
+                    if (ping.Value.PingMs is int ms)
+                    {
+                        SolidColorBrush pingBrush = GetPingBrush(ms);
+                        PingValueText.Text = $"{ms} ms";
+                        PingValueText.Foreground = pingBrush;
+                        MiniPingText.Text = $"{ms} ms";
+                        MiniPingText.Foreground = pingBrush;
+                    }
+                    else
+                    {
+                        PingValueText.Text = "-- ms";
+                        PingValueText.Foreground = PingMutedBrush;
+                        MiniPingText.Text = "-- ms";
+                        MiniPingText.Foreground = PingMutedBrush;
+                    }
                 }
 
                 // Red/Internet
@@ -1117,24 +1178,20 @@ public partial class MainWindow : Window
         bool showGpu = ShowGpuMenuItem?.IsChecked ?? true;
         bool showRam = ShowRamMenuItem?.IsChecked ?? true;
         bool showFps = ShowFpsMenuItem?.IsChecked ?? true;
+        bool showPing = ShowPingMenuItem?.IsChecked ?? true;
         bool showNet = ShowNetworkMenuItem?.IsChecked ?? true;
         bool showButtons = ShowActionButtonsMenuItem?.IsChecked ?? false;
 
         _showFps = showFps;
+        _showPing = showPing;
+        if (!showPing)
+        {
+            _hasActiveGamePing = false;
+        }
 
         if (CpuFullCard != null) CpuFullCard.Visibility = showCpu ? Visibility.Visible : Visibility.Collapsed;
         if (GpuFullCard != null) GpuFullCard.Visibility = showGpu ? Visibility.Visible : Visibility.Collapsed;
         if (RamFullCard != null) RamFullCard.Visibility = showRam ? Visibility.Visible : Visibility.Collapsed;
-        if (FpsFullSection != null)
-        {
-            FpsFullSection.Visibility = showFps ? Visibility.Visible : Visibility.Collapsed;
-            FpsFullSection.Margin = (showNet || showButtons) ? new Thickness(0, 0, 0, 12) : new Thickness(0);
-        }
-        if (NetFullSection != null)
-        {
-            NetFullSection.Visibility = showNet ? Visibility.Visible : Visibility.Collapsed;
-            NetFullSection.Margin = showButtons ? new Thickness(0, 0, 0, 12) : new Thickness(0);
-        }
         if (ActionButtonsGrid != null)
         {
             ActionButtonsGrid.Visibility = showButtons ? Visibility.Visible : Visibility.Collapsed;
@@ -1144,10 +1201,6 @@ public partial class MainWindow : Window
             DetailsPanel.Visibility = Visibility.Collapsed;
             if (MoreDetailsButton != null) MoreDetailsButton.Content = "Ver más";
         }
-        if (BottomFullCard != null)
-        {
-            BottomFullCard.Visibility = (showFps || showNet || showButtons) ? Visibility.Visible : Visibility.Collapsed;
-        }
 
         if (MiniCpuPill != null) MiniCpuPill.Visibility = showCpu ? Visibility.Visible : Visibility.Collapsed;
         if (MiniGpuPill != null) MiniGpuPill.Visibility = showGpu ? Visibility.Visible : Visibility.Collapsed;
@@ -1155,21 +1208,75 @@ public partial class MainWindow : Window
         if (MiniFpsPill != null) MiniFpsPill.Visibility = showFps ? Visibility.Visible : Visibility.Collapsed;
         if (MiniNetPill != null) MiniNetPill.Visibility = showNet ? Visibility.Visible : Visibility.Collapsed;
 
+        UpdateBottomCardLayout();
+
         if (manageFpsMonitor)
         {
-            if (showFps)
+            if (showFps || showPing)
             {
                 _fpsMonitor.Start();
             }
             else
             {
                 _fpsMonitor.Stop();
+            }
+
+            if (!showFps)
+            {
                 _fpsHistory.Clear();
                 if (FpsValueText != null) FpsValueText.Text = "-- FPS";
                 if (MiniFpsText != null) MiniFpsText.Text = "--";
                 if (FpsAppText != null) FpsAppText.Text = "En espera";
                 if (FpsMinMaxText != null) FpsMinMaxText.Text = "Min: -- / Max: --";
             }
+
+            if (!showPing)
+            {
+                if (PingValueText != null)
+                {
+                    PingValueText.Text = "-- ms";
+                    PingValueText.Foreground = PingMutedBrush;
+                }
+                if (MiniPingText != null)
+                {
+                    MiniPingText.Text = "-- ms";
+                    MiniPingText.Foreground = PingMutedBrush;
+                }
+                if (PingGameText != null) PingGameText.Text = "Sin juego";
+                if (PingServerText != null) PingServerText.Text = "Servidor: --";
+            }
+        }
+    }
+
+    private void UpdateBottomCardLayout()
+    {
+        bool showFps = ShowFpsMenuItem?.IsChecked ?? true;
+        bool showPingVisible = (ShowPingMenuItem?.IsChecked ?? true) && _hasActiveGamePing;
+        bool showNet = ShowNetworkMenuItem?.IsChecked ?? true;
+        bool showButtons = ShowActionButtonsMenuItem?.IsChecked ?? false;
+
+        if (FpsFullSection != null)
+        {
+            FpsFullSection.Visibility = showFps ? Visibility.Visible : Visibility.Collapsed;
+            FpsFullSection.Margin = (showPingVisible || showNet || showButtons) ? new Thickness(0, 0, 0, 12) : new Thickness(0);
+        }
+        if (PingFullSection != null)
+        {
+            PingFullSection.Visibility = showPingVisible ? Visibility.Visible : Visibility.Collapsed;
+            PingFullSection.Margin = (showNet || showButtons) ? new Thickness(0, 0, 0, 12) : new Thickness(0);
+        }
+        if (NetFullSection != null)
+        {
+            NetFullSection.Visibility = showNet ? Visibility.Visible : Visibility.Collapsed;
+            NetFullSection.Margin = showButtons ? new Thickness(0, 0, 0, 12) : new Thickness(0);
+        }
+        if (BottomFullCard != null)
+        {
+            BottomFullCard.Visibility = (showFps || showPingVisible || showNet || showButtons) ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (MiniPingPill != null)
+        {
+            MiniPingPill.Visibility = showPingVisible ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 
@@ -1208,7 +1315,7 @@ public partial class MainWindow : Window
 
         if (MinimalistItemsPanel == null || MinimalistViewCard == null ||
             MiniCpuPill == null || MiniGpuPill == null || MiniRamPill == null ||
-            MiniFpsPill == null || MiniNetPill == null || MiniSettingsButton == null)
+            MiniFpsPill == null || MiniPingPill == null || MiniNetPill == null || MiniSettingsButton == null)
         {
             return;
         }
@@ -1223,6 +1330,7 @@ public partial class MainWindow : Window
             MiniGpuPill.Margin = pillMargin;
             MiniRamPill.Margin = pillMargin;
             MiniFpsPill.Margin = pillMargin;
+            MiniPingPill.Margin = pillMargin;
             MiniNetPill.Margin = new Thickness(0, 0, 0, 4);
             MiniSettingsButton.HorizontalAlignment = HorizontalAlignment.Right;
         }
@@ -1234,6 +1342,7 @@ public partial class MainWindow : Window
             MiniGpuPill.Margin = pillMargin;
             MiniRamPill.Margin = pillMargin;
             MiniFpsPill.Margin = pillMargin;
+            MiniPingPill.Margin = pillMargin;
             MiniNetPill.Margin = new Thickness(0, 0, 4, 0);
             MiniSettingsButton.HorizontalAlignment = HorizontalAlignment.Center;
         }
@@ -1492,6 +1601,7 @@ public partial class MainWindow : Window
         _winEventDelegate = null;
         _cts.Cancel();
         _fpsMonitor.Dispose();
+        _pingMonitor.Dispose();
         try { _computer.Close(); } catch { }
     }
 }

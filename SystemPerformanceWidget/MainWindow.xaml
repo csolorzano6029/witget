@@ -128,6 +128,12 @@
                           IsChecked="True"
                           StaysOpenOnClick="True"
                           Click="VisibleSectionsMenuItem_Click"/>
+                <MenuItem x:Name="ShowPingMenuItem"
+                          Header="📡 Ping (Juego)"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          StaysOpenOnClick="True"
+                          Click="VisibleSectionsMenuItem_Click"/>
                 <MenuItem x:Name="ShowNetworkMenuItem"
                           Header="🌐 Red / Internet"
                           IsCheckable="True"
@@ -515,6 +521,45 @@
                             </StackPanel>
                         </Grid>
 
+                        <!-- Sección Ping (Juego) - solo visible cuando hay un juego activo -->
+                        <Grid x:Name="PingFullSection" Visibility="Collapsed" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Ping (Juego)"
+                                           Foreground="#26C6DA"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"/>
+                                <TextBlock x:Name="PingValueText"
+                                           Text="-- ms"
+                                           Foreground="#FFFFFF"
+                                           FontSize="24"
+                                           FontWeight="SemiBold"
+                                           Margin="0,1,0,1"/>
+                                <TextBlock x:Name="PingGameText"
+                                           Text="Sin juego"
+                                           Foreground="#A8B7C8"
+                                           FontSize="11.5"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" VerticalAlignment="Bottom" HorizontalAlignment="Right" Margin="8,0,0,2">
+                                <TextBlock x:Name="PingServerText"
+                                           Text="Servidor: --"
+                                           Foreground="#D2DDE9"
+                                           FontSize="11"
+                                           HorizontalAlignment="Right"/>
+                                <TextBlock Text="Latencia del juego"
+                                           Foreground="#8C9CAE"
+                                           FontSize="10"
+                                           HorizontalAlignment="Right"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </Grid>
+
                         <!-- Sección Red/Internet -->
                         <Grid x:Name="NetFullSection" Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
@@ -658,6 +703,18 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="FPS" Foreground="#B8CAE0" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <TextBlock Grid.Column="1" x:Name="MiniFpsText" Text="--" Width="32" TextAlignment="Right" Foreground="#FFFFFF" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- PING (solo visible cuando hay un juego activo) -->
+                    <Border x:Name="MiniPingPill" Visibility="Collapsed" Background="#CC132A32" BorderBrush="#2E26C6DA" BorderThickness="1" CornerRadius="8" Padding="9,4" Margin="0,0,6,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="PING" Foreground="#26C6DA" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBlock Grid.Column="1" x:Name="MiniPingText" Text="-- ms" Width="48" TextAlignment="Right" Foreground="#FFFFFF" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         </Grid>
                     </Border>
 

@@ -24,7 +24,7 @@ public class WeatherSettings
     public double Scale { get; set; } = 1.0;
     public bool Topmost { get; set; } = false;
     public bool LockPosition { get; set; } = false;
-    public bool StartWithWindows { get; set; } = true;
+    public bool StartWithWindows { get; set; } = false;
     public double? Left { get; set; }
     public double? Top { get; set; }
 }
@@ -219,7 +219,9 @@ public partial class MainWindow : Window
             _settings.Top = Top;
 
             string json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_settingsPath, json);
+            string tmpPath = _settingsPath + ".tmp";
+            File.WriteAllText(tmpPath, json);
+            File.Move(tmpPath, _settingsPath, overwrite: true);
         }
         catch { }
     }
@@ -228,19 +230,25 @@ public partial class MainWindow : Window
     {
         try
         {
-            string exePath = ResolveExePath();
-            if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return;
-
             using RegistryKey? runKey = Registry.CurrentUser.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", writable: true);
 
             if (enable)
             {
+                string exePath = ResolveExePath();
+                if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return;
                 runKey?.SetValue("WeatherWidget", $"\"{exePath}\"");
             }
             else
             {
                 runKey?.DeleteValue("WeatherWidget", throwOnMissingValue: false);
+                try
+                {
+                    using RegistryKey? approvedKey = Registry.CurrentUser.OpenSubKey(
+                        @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run", writable: true);
+                    approvedKey?.DeleteValue("WeatherWidget", throwOnMissingValue: false);
+                }
+                catch { }
             }
         }
         catch { }
@@ -589,7 +597,9 @@ public partial class MainWindow : Window
 
     private void StartWithWindowsMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        ConfigureAutoStart(StartWithWindowsMenuItem.IsChecked);
+        bool enable = StartWithWindowsMenuItem.IsChecked;
+        _settings.StartWithWindows = enable;
+        ConfigureAutoStart(enable);
         SaveSettings();
     }
 

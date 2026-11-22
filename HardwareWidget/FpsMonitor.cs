@@ -6,7 +6,13 @@ using Microsoft.Diagnostics.Tracing.Session;
 
 namespace HardwareWidget;
 
-internal readonly record struct FpsSnapshot(double? Fps, double? FrameTimeMs, string AppName, bool RequiresAdmin);
+internal readonly record struct FpsSnapshot(
+    double? Fps,
+    double? FrameTimeMs,
+    string AppName,
+    int ActivePid,
+    uint? UdpRemoteAddr,
+    bool RequiresAdmin);
 
 internal sealed class FpsMonitor : IDisposable
 {
@@ -17,14 +23,17 @@ internal sealed class FpsMonitor : IDisposable
     private static readonly Guid DxgiProviderGuid = new("CA11C036-0102-4A2D-A6AD-F03CFED5D3C9");
     private static readonly Guid D3D9ProviderGuid = new("783ACA0A-790E-4D7F-8451-AA850511C6B9");
     private static readonly Guid DxgKrnlProviderGuid = new("802EC45A-1E99-4B83-9920-87C98277BA9D");
+    private static readonly Guid KernelNetworkProviderGuid = new("7DD42A49-5329-4832-8DFD-43D979153A88");
 
     private const ulong DxgiEventsKeyword = 0x0000000000000002;
     private const ulong DxgKrnlPresentKeyword = 0x0000000008000000;
+    private const ulong KernelNetworkIpv4Keyword = 0x0000000000000010;
 
     private const int DxgiPresentStartId = 42;
     private const int DxgiMpoPresentStartId = 55;
     private const int D3D9PresentStartId = 1;
     private const int DxgKrnlPresentInfoId = 184;
+    private const int KernelNetworkUdpSendId = 42;
 
     private static readonly HashSet<string> ExcludedProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -48,6 +57,8 @@ internal sealed class FpsMonitor : IDisposable
         public readonly List<double> KernelTimestampsMs = new(128);
         public DateTime LastPrimaryUtc;
         public DateTime LastKernelUtc;
+        public uint? LastUdpRemoteAddr;
+        public DateTime LastUdpUtc;
         public string? ProcessName;
         public bool IsExcluded;
     }
@@ -118,7 +129,7 @@ internal sealed class FpsMonitor : IDisposable
     {
         if (_requiresAdmin)
         {
-            return new FpsSnapshot(null, null, "Requiere Admin", true);
+            return new FpsSnapshot(null, null, "Requiere Admin", 0, null, true);
         }
 
         int fgPid = GetEffectiveForegroundPid();
@@ -132,7 +143,8 @@ internal sealed class FpsMonitor : IDisposable
             {
                 if (TryComputeMetrics(fgData, nowUtc, out double fps, out double frameTimeMs))
                 {
-                    return new FpsSnapshot(fps, frameTimeMs, fgData.ProcessName ?? $"PID {fgPid}", false);
+                    uint? udpAddr = (nowUtc - fgData.LastUdpUtc).TotalSeconds <= 15.0 ? fgData.LastUdpRemoteAddr : null;
+                    return new FpsSnapshot(fps, frameTimeMs, fgData.ProcessName ?? $"PID {fgPid}", fgPid, udpAddr, false);
                 }
             }
 
@@ -140,6 +152,8 @@ internal sealed class FpsMonitor : IDisposable
             double bestFps = 0;
             double bestFrameTime = 0;
             string? bestName = null;
+            int bestPid = 0;
+            uint? bestUdpAddr = null;
 
             foreach ((int pid, PidFrameData data) in _pidFrames)
             {
@@ -149,16 +163,18 @@ internal sealed class FpsMonitor : IDisposable
                     bestFps = fps;
                     bestFrameTime = frameTimeMs;
                     bestName = data.ProcessName ?? $"PID {pid}";
+                    bestPid = pid;
+                    bestUdpAddr = (nowUtc - data.LastUdpUtc).TotalSeconds <= 15.0 ? data.LastUdpRemoteAddr : null;
                 }
             }
 
             if (bestName != null)
             {
-                return new FpsSnapshot(bestFps, bestFrameTime, bestName, false);
+                return new FpsSnapshot(bestFps, bestFrameTime, bestName, bestPid, bestUdpAddr, false);
             }
         }
 
-        return new FpsSnapshot(null, null, "En espera", false);
+        return new FpsSnapshot(null, null, "En espera", 0, null, false);
     }
 
     private void RunSessionLoop()
@@ -181,6 +197,7 @@ internal sealed class FpsMonitor : IDisposable
             session.EnableProvider(DxgiProviderGuid, TraceEventLevel.Verbose, DxgiEventsKeyword);
             session.EnableProvider(D3D9ProviderGuid, TraceEventLevel.Verbose, ulong.MaxValue);
             session.EnableProvider(DxgKrnlProviderGuid, TraceEventLevel.Informational, DxgKrnlPresentKeyword);
+            session.EnableProvider(KernelNetworkProviderGuid, TraceEventLevel.Informational, KernelNetworkIpv4Keyword);
 
             session.Source.AllEvents += OnTraceEvent;
             session.Source.Process();
@@ -236,6 +253,27 @@ internal sealed class FpsMonitor : IDisposable
 
         int eventId = (int)data.ID;
         Guid provider = data.ProviderGuid;
+
+        if (provider == KernelNetworkProviderGuid && eventId == KernelNetworkUdpSendId)
+        {
+            if (data.EventDataLength >= 12)
+            {
+                byte[] payload = data.EventData();
+                uint daddr = BitConverter.ToUInt32(payload, 8);
+                if (GamePingMonitor.IsPublicIPv4(daddr))
+                {
+                    lock (_lock)
+                    {
+                        if (_pidFrames.TryGetValue(pid, out PidFrameData? existing) && !existing.IsExcluded)
+                        {
+                            existing.LastUdpRemoteAddr = daddr;
+                            existing.LastUdpUtc = DateTime.UtcNow;
+                        }
+                    }
+                }
+            }
+            return;
+        }
 
         bool isPrimary;
         if (provider == DxgiProviderGuid && (eventId == DxgiPresentStartId || eventId == DxgiMpoPresentStartId))

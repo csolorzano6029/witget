@@ -16,6 +16,39 @@
         Closing="Window_Closing"
         Closed="Window_Closed">
 
+    <Window.Resources>
+        <Style x:Key="DiscreetGearButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#DCE3EC"/>
+            <Setter Property="Opacity" Value="0.42"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Opacity" Value="1.0"/>
+                                <Setter TargetName="Bd" Property="Background" Value="#28FFFFFF"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Opacity" Value="1.0"/>
+                                <Setter TargetName="Bd" Property="Background" Value="#3EFFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Window.ContextMenu>
         <ContextMenu x:Name="WidgetContextMenu" MinWidth="230">
             <!-- Check / Switch de Modo Minimalista -->
@@ -25,18 +58,38 @@
                       IsChecked="False"
                       StaysOpenOnClick="True"
                       Click="MinimalistMenuItem_Click"/>
-            <MenuItem x:Name="ShowRamMenuItem"
-                      Header="🧠 Mostrar RAM"
-                      IsCheckable="True"
-                      IsChecked="True"
-                      StaysOpenOnClick="True"
-                      Click="ShowRamMenuItem_Click"/>
-            <MenuItem x:Name="ShowFpsMenuItem"
-                      Header="🎮 Mostrar FPS"
-                      IsCheckable="True"
-                      IsChecked="True"
-                      StaysOpenOnClick="True"
-                      Click="ShowFpsMenuItem_Click"/>
+            <MenuItem Header="👁️ Mostrar indicadores">
+                <MenuItem x:Name="ShowCpuMenuItem"
+                          Header="🔥 CPU"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          StaysOpenOnClick="True"
+                          Click="ShowCpuMenuItem_Click"/>
+                <MenuItem x:Name="ShowGpuMenuItem"
+                          Header="🟩 GPU"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          StaysOpenOnClick="True"
+                          Click="ShowGpuMenuItem_Click"/>
+                <MenuItem x:Name="ShowRamMenuItem"
+                          Header="🧠 RAM"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          StaysOpenOnClick="True"
+                          Click="ShowRamMenuItem_Click"/>
+                <MenuItem x:Name="ShowFpsMenuItem"
+                          Header="🎮 FPS"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          StaysOpenOnClick="True"
+                          Click="ShowFpsMenuItem_Click"/>
+                <MenuItem x:Name="ShowPingMenuItem"
+                          Header="📡 Ping (Juego)"
+                          IsCheckable="True"
+                          IsChecked="True"
+                          StaysOpenOnClick="True"
+                          Click="ShowPingMenuItem_Click"/>
+            </MenuItem>
 
             <!-- Estilo de Fondo -->
             <MenuItem Header="🎨 Fondo">
@@ -346,6 +399,62 @@
                                VerticalAlignment="Center"/>
                 </Grid>
             </Border>
+
+            <!-- Cajita 5: PING (solo visible cuando hay un juego ejecutándose) -->
+            <Border x:Name="PingCard"
+                    Visibility="Collapsed"
+                    Width="215"
+                    Margin="0,8,0,0"
+                    Background="#EE141720"
+                    BorderBrush="#38FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="12,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                        <TextBlock x:Name="PingTitleText" Text="PING (JUEGO)" Foreground="#26C6DA" FontSize="11" FontWeight="Bold"/>
+                        <TextBlock x:Name="PingGameText"
+                                   Text="Sin juego"
+                                   Foreground="#99AAB8"
+                                   FontSize="10"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="115"/>
+                        <TextBlock x:Name="PingServerText"
+                                   Text="Servidor: --"
+                                   Foreground="#CED6E0"
+                                   FontSize="11"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="PingValueText"
+                               Grid.Column="1"
+                               Text="-- ms"
+                               MinWidth="74"
+                               TextAlignment="Right"
+                               Foreground="#96A0AF"
+                               FontSize="24"
+                               FontWeight="Bold"
+                               VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <!-- Botón discreto de configuración (funciona incluso con Ignorar clics activo) -->
+            <Button x:Name="SettingsButton"
+                    Style="{StaticResource DiscreetGearButton}"
+                    Width="24"
+                    Height="24"
+                    Margin="0,4,0,0"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    Click="SettingsButton_Click"
+                    ToolTip="Configuración">
+                <TextBlock Text="⚙" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+            </Button>
             </StackPanel>
         </Border>
 

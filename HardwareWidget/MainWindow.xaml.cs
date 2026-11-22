@@ -21,8 +21,11 @@ public class WidgetSettings
     public double Scale { get; set; } = 1.0;
     public bool IsHorizontal { get; set; } = false;
     public bool MinimalistMode { get; set; } = false;
+    public bool ShowCpu { get; set; } = true;
+    public bool ShowGpu { get; set; } = true;
     public bool ShowRam { get; set; } = true;
     public bool ShowFps { get; set; } = true;
+    public bool ShowPing { get; set; } = true;
     public bool TransparentBackground { get; set; } = false;
     public string? BackgroundMode { get; set; }
     public double IndicatorSpacing { get; set; } = 8.0;
@@ -63,6 +66,7 @@ public partial class MainWindow : Window
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
     private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TOPMOST = 0x00000008;
     private const int WS_EX_TRANSPARENT = 0x00000020;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
@@ -74,6 +78,13 @@ public partial class MainWindow : Window
     private const uint MOD_SHIFT = 0x0004;
     private const uint MOD_NOREPEAT = 0x4000;
     private const uint VK_H = 0x48;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
@@ -148,6 +159,9 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
 
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -184,6 +198,7 @@ public partial class MainWindow : Window
     private readonly Computer _computer;
     private readonly UpdateVisitor _updateVisitor = new();
     private readonly FpsMonitor _fpsMonitor = new();
+    private readonly GamePingMonitor _pingMonitor = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly DispatcherTimer _topmostTimer;
     private readonly bool _isAdmin;
@@ -205,8 +220,11 @@ public partial class MainWindow : Window
     private int _instanceCheckTick;
     private volatile bool _wasPawnIoInstalled;
     private volatile bool _isInstallingPawnIo;
+    private volatile bool _showCpu = true;
+    private volatile bool _showGpu = true;
     private volatile bool _showRam = true;
     private volatile bool _showFps = true;
+    private volatile bool _showPing = true;
     private volatile bool _isDragging;
     private IntPtr _hwnd;
     private IntPtr _winEventHook;
@@ -268,14 +286,14 @@ public partial class MainWindow : Window
             IsMotherboardEnabled = true
         };
 
-        // Timer ligero: verifica instancia única cada ~400ms y asegura el orden Z sobre la Barra de Tareas solo si hace falta
+        // Timer ligero: verifica instancia única cada ~480ms, actualiza click-through y asegura orden Z sobre Barra de Tareas
         _topmostTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(100)
+            Interval = TimeSpan.FromMilliseconds(60)
         };
         _topmostTimer.Tick += (_, _) =>
         {
-            if (++_instanceCheckTick >= 4)
+            if (++_instanceCheckTick >= 8)
             {
                 _instanceCheckTick = 0;
                 if (ShouldCloseForNewerInstance())
@@ -290,7 +308,7 @@ public partial class MainWindow : Window
             {
                 UpdateClickThroughState();
 
-                if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && IsTaskbarAboveWidget())
+                if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && NeedsTopmostRefresh())
                 {
                     ForceAboveTaskbar();
                 }
@@ -386,10 +404,14 @@ public partial class MainWindow : Window
 
         bool altPressed = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
         bool manualClickThrough = ClickThroughMenuItem?.IsChecked == true;
+        bool inFullscreenGame = IsForegroundFullscreenOrBorderless();
+        bool hoveringSettingsOnDesktop = !inFullscreenGame && IsCursorOverSettingsButton();
+
         bool shouldPassThrough = !_isDragging &&
                                  !WidgetContextMenu.IsOpen &&
                                  !altPressed &&
-                                 (manualClickThrough || IsForegroundFullscreenOrBorderless());
+                                 !hoveringSettingsOnDesktop &&
+                                 (manualClickThrough || inFullscreenGame);
 
         if (shouldPassThrough == _isClickThroughApplied) return;
 
@@ -400,6 +422,36 @@ public partial class MainWindow : Window
 
         SetWindowLong(_hwnd, GWL_EXSTYLE, newStyle);
         _isClickThroughApplied = shouldPassThrough;
+        if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen)
+        {
+            ForceAboveTaskbar();
+        }
+    }
+
+    private bool IsCursorOverSettingsButton()
+    {
+        if (SettingsButton == null || !SettingsButton.IsVisible || SettingsButton.ActualWidth <= 0 || SettingsButton.ActualHeight <= 0)
+            return false;
+
+        if (!GetCursorPos(out POINT pt)) return false;
+
+        try
+        {
+            Point local = SettingsButton.PointFromScreen(new Point(pt.X, pt.Y));
+            return local.X >= -2 && local.Y >= -2 &&
+                   local.X <= SettingsButton.ActualWidth + 2 &&
+                   local.Y <= SettingsButton.ActualHeight + 2;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        WidgetContextMenu.PlacementTarget = SettingsButton;
+        WidgetContextMenu.IsOpen = true;
     }
 
     private bool IsForegroundFullscreenOrBorderless()
@@ -460,7 +512,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (IsTaskbarAboveWidget())
+        if (NeedsTopmostRefresh())
         {
             ForceAboveTaskbar();
         }
@@ -469,7 +521,7 @@ public partial class MainWindow : Window
             // Si la Barra de Tareas recibió clic/foco pero aún está subiendo en el Z-order
             _ = Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
             {
-                if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && IsTaskbarAboveWidget())
+                if (Topmost && !_isDragging && !WidgetContextMenu.IsOpen && NeedsTopmostRefresh())
                 {
                     ForceAboveTaskbar();
                 }
@@ -477,12 +529,20 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool NeedsTopmostRefresh()
+    {
+        if (_hwnd == IntPtr.Zero || !Topmost) return false;
+        int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+        if ((exStyle & WS_EX_TOPMOST) == 0) return true;
+        return IsTaskbarAboveWidget();
+    }
+
     private bool IsTaskbarAboveWidget()
     {
         if (_hwnd == IntPtr.Zero) return false;
 
         IntPtr current = GetWindow(_hwnd, GW_HWNDPREV);
-        for (int i = 0; i < 40 && current != IntPtr.Zero; i++)
+        for (int i = 0; i < 256 && current != IntPtr.Zero; i++)
         {
             if (IsTaskbarWindow(current))
             {
@@ -518,6 +578,12 @@ public partial class MainWindow : Window
         if (_hwnd == IntPtr.Zero) return;
         if (Topmost)
         {
+            int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+            if ((exStyle & WS_EX_TOPMOST) == 0)
+            {
+                // Si el SO quitó WS_EX_TOPMOST (común al arrancar con Windows), forzar ciclo NOTOPMOST -> TOPMOST
+                SetWindowPos(_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            }
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
         else
@@ -575,8 +641,11 @@ public partial class MainWindow : Window
         LockPositionMenuItem.IsChecked = _settings.LockPosition;
         ClickThroughMenuItem.IsChecked = _settings.ClickThrough;
         MinimalistMenuItem.IsChecked = _settings.MinimalistMode;
+        ShowCpuMenuItem.IsChecked = _settings.ShowCpu;
+        ShowGpuMenuItem.IsChecked = _settings.ShowGpu;
         ShowRamMenuItem.IsChecked = _settings.ShowRam;
         ShowFpsMenuItem.IsChecked = _settings.ShowFps;
+        ShowPingMenuItem.IsChecked = _settings.ShowPing;
         StartWithWindowsMenuItem.IsChecked = _settings.StartWithWindows;
 
         string initialBgMode = _settings.BackgroundMode switch
@@ -589,8 +658,11 @@ public partial class MainWindow : Window
 
         ApplyBackgroundMode(initialBgMode);
         ApplyMinimalistMode(_settings.MinimalistMode);
+        ApplyShowCpu(_settings.ShowCpu);
+        ApplyShowGpu(_settings.ShowGpu);
         ApplyShowRam(_settings.ShowRam);
         ApplyShowFps(_settings.ShowFps, manageMonitor: false);
+        ApplyShowPing(_settings.ShowPing, manageMonitor: false);
         ApplyOrientation(_settings.IsHorizontal);
         ApplySpacing(SpacingSlider.Value);
         ApplyOpacity(OpacitySlider.Value);
@@ -607,8 +679,11 @@ public partial class MainWindow : Window
             _settings.IndicatorSpacing = SpacingSlider.Value;
             _settings.IsHorizontal = HorizontalLayoutMenuItem.IsChecked;
             _settings.MinimalistMode = MinimalistMenuItem.IsChecked;
+            _settings.ShowCpu = ShowCpuMenuItem.IsChecked;
+            _settings.ShowGpu = ShowGpuMenuItem.IsChecked;
             _settings.ShowRam = ShowRamMenuItem.IsChecked;
             _settings.ShowFps = ShowFpsMenuItem.IsChecked;
+            _settings.ShowPing = ShowPingMenuItem.IsChecked;
             _settings.BackgroundMode = _backgroundMode;
             _settings.TransparentBackground = string.Equals(_backgroundMode, "None", StringComparison.Ordinal);
             _settings.Topmost = Topmost;
@@ -669,7 +744,29 @@ public partial class MainWindow : Window
         ForceAboveTaskbar();
         _topmostTimer.Start();
 
-        if (_showFps)
+        // Al iniciar sesión en Windows, Explorer y la barra de tareas terminan de cargarse unos segundos después.
+        // Reaplicar el Z-order tras esos intervalos garantiza que quede por encima de la barra de tareas.
+        _ = Task.Run(async () =>
+        {
+            foreach (int delayMs in new[] { 600, 2000, 5000, 10000 })
+            {
+                try
+                {
+                    await Task.Delay(delayMs, _cts.Token).ConfigureAwait(false);
+                    _ = Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+                    {
+                        if (Topmost && !_isHiddenByHotkey && !_isDragging && !WidgetContextMenu.IsOpen)
+                        {
+                            ForceAboveTaskbar();
+                        }
+                    });
+                }
+                catch (OperationCanceledException) { break; }
+                catch { }
+            }
+        });
+
+        if (_showFps || _showPing)
         {
             _fpsMonitor.Start();
         }
@@ -835,7 +932,10 @@ public partial class MainWindow : Window
             _cpuTitleLabel = cpuTitle;
             _gpuTitleLabel = gpuTitle;
 
-            FpsSnapshot? fpsSnapshot = _showFps ? _fpsMonitor.GetCurrentSnapshot() : null;
+            FpsSnapshot? fpsSnapshot = (_showFps || _showPing) ? _fpsMonitor.GetCurrentSnapshot() : null;
+            GamePingSnapshot? pingSnapshot = (_showPing && fpsSnapshot.HasValue)
+                ? _pingMonitor.GetSnapshot(fpsSnapshot.Value.ActivePid, fpsSnapshot.Value.AppName, fpsSnapshot.Value.UdpRemoteAddr)
+                : null;
             (double usedGb, double totalGb, double percent)? ramSnapshot = _showRam ? TryReadRamStatus() : null;
 
             _ = Dispatcher.InvokeAsync(() =>
@@ -923,6 +1023,35 @@ public partial class MainWindow : Window
                         }
                     }
                 }
+
+                Visibility prevPingVis = PingCard.Visibility;
+                if (_showPing && pingSnapshot.HasValue && pingSnapshot.Value.HasActiveGame)
+                {
+                    PingCard.Visibility = Visibility.Visible;
+                    PingGameText.Text = pingSnapshot.Value.GameName;
+                    PingServerText.Text = string.IsNullOrEmpty(pingSnapshot.Value.ServerIp)
+                        ? "Servidor: --"
+                        : $"IP: {pingSnapshot.Value.ServerIp}";
+                    if (pingSnapshot.Value.PingMs is int ms)
+                    {
+                        PingValueText.Text = $"{ms} ms";
+                        PingValueText.Foreground = GetPingBrush(ms);
+                    }
+                    else
+                    {
+                        PingValueText.Text = "-- ms";
+                        PingValueText.Foreground = MutedBrush;
+                    }
+                }
+                else
+                {
+                    PingCard.Visibility = Visibility.Collapsed;
+                }
+
+                if (PingCard.Visibility != prevPingVis)
+                {
+                    UpdateCardMargins();
+                }
             }, DispatcherPriority.Background);
         }
         catch { }
@@ -980,6 +1109,13 @@ public partial class MainWindow : Window
         return RedBrush;
     }
 
+    private static SolidColorBrush GetPingBrush(int pingMs)
+    {
+        if (pingMs < 60) return GreenBrush;
+        if (pingMs < 120) return YellowBrush;
+        return RedBrush;
+    }
+
     private static (double usedGb, double totalGb, double percent)? TryReadRamStatus()
     {
         try
@@ -1028,6 +1164,40 @@ public partial class MainWindow : Window
         }
     }
 
+    // --- MOSTRAR / OCULTAR CPU ---
+    private void ShowCpuMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyShowCpu(ShowCpuMenuItem.IsChecked);
+        SaveSettings();
+    }
+
+    private void ApplyShowCpu(bool showCpu)
+    {
+        _showCpu = showCpu;
+        if (CpuCard != null)
+        {
+            CpuCard.Visibility = showCpu ? Visibility.Visible : Visibility.Collapsed;
+        }
+        UpdateCardMargins();
+    }
+
+    // --- MOSTRAR / OCULTAR GPU ---
+    private void ShowGpuMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyShowGpu(ShowGpuMenuItem.IsChecked);
+        SaveSettings();
+    }
+
+    private void ApplyShowGpu(bool showGpu)
+    {
+        _showGpu = showGpu;
+        if (GpuCard != null)
+        {
+            GpuCard.Visibility = showGpu ? Visibility.Visible : Visibility.Collapsed;
+        }
+        UpdateCardMargins();
+    }
+
     // --- MOSTRAR / OCULTAR RAM ---
     private void ShowRamMenuItem_Click(object sender, RoutedEventArgs e)
     {
@@ -1047,6 +1217,7 @@ public partial class MainWindow : Window
         {
             UpdateRamUi(TryReadRamStatus());
         }
+        UpdateCardMargins();
     }
 
     // --- MOSTRAR / OCULTAR FPS ---
@@ -1063,6 +1234,7 @@ public partial class MainWindow : Window
         {
             FpsCard.Visibility = showFps ? Visibility.Visible : Visibility.Collapsed;
         }
+        UpdateCardMargins();
 
         if (!manageMonitor) return;
 
@@ -1072,7 +1244,10 @@ public partial class MainWindow : Window
         }
         else
         {
-            _fpsMonitor.Stop();
+            if (!_showPing)
+            {
+                _fpsMonitor.Stop();
+            }
             if (FpsValueText != null)
             {
                 FpsValueText.Text = "--";
@@ -1080,6 +1255,44 @@ public partial class MainWindow : Window
             }
             if (FpsAppText != null) FpsAppText.Text = "En espera";
             if (FpsFrameTimeText != null) FpsFrameTimeText.Text = "Frame: -- ms";
+        }
+    }
+
+    // --- MOSTRAR / OCULTAR PING (JUEGO) ---
+    private void ShowPingMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyShowPing(ShowPingMenuItem.IsChecked, manageMonitor: true);
+        SaveSettings();
+    }
+
+    private void ApplyShowPing(bool showPing, bool manageMonitor)
+    {
+        _showPing = showPing;
+        if (!showPing && PingCard != null)
+        {
+            PingCard.Visibility = Visibility.Collapsed;
+        }
+        UpdateCardMargins();
+
+        if (!manageMonitor) return;
+
+        if (showPing)
+        {
+            _fpsMonitor.Start();
+        }
+        else
+        {
+            if (!_showFps)
+            {
+                _fpsMonitor.Stop();
+            }
+            if (PingValueText != null)
+            {
+                PingValueText.Text = "-- ms";
+                PingValueText.Foreground = MutedBrush;
+            }
+            if (PingGameText != null) PingGameText.Text = "Sin juego";
+            if (PingServerText != null) PingServerText.Text = "Servidor: --";
         }
     }
 
@@ -1110,8 +1323,10 @@ public partial class MainWindow : Window
         if (UnifiedBgMenuItem != null) UnifiedBgMenuItem.IsChecked = mode == "Unified";
         if (NoBgMenuItem != null) NoBgMenuItem.IsChecked = mode == "None";
 
-        if (UnifiedContainer == null || CpuCard == null || GpuCard == null || RamCard == null || FpsCard == null || CardsPanel == null)
+        if (UnifiedContainer == null || CpuCard == null || GpuCard == null || RamCard == null || FpsCard == null || PingCard == null || CardsPanel == null)
             return;
+
+        Border[] allCards = new[] { CpuCard, GpuCard, RamCard, FpsCard, PingCard };
 
         if (mode == "Unified")
         {
@@ -1122,7 +1337,7 @@ public partial class MainWindow : Window
                 ? new Thickness(4, 2, 4, 2)
                 : new Thickness(4);
 
-            foreach (Border card in new[] { CpuCard, GpuCard, RamCard, FpsCard })
+            foreach (Border card in allCards)
             {
                 card.Background = Brushes.Transparent;
                 card.BorderBrush = Brushes.Transparent;
@@ -1138,7 +1353,7 @@ public partial class MainWindow : Window
             UnifiedContainer.BorderThickness = new Thickness(0);
             UnifiedContainer.Padding = new Thickness(0);
 
-            foreach (Border card in new[] { CpuCard, GpuCard, RamCard, FpsCard })
+            foreach (Border card in allCards)
             {
                 card.Background = InvisibleHitBrush;
                 card.BorderBrush = Brushes.Transparent;
@@ -1154,7 +1369,7 @@ public partial class MainWindow : Window
             UnifiedContainer.BorderThickness = new Thickness(0);
             UnifiedContainer.Padding = new Thickness(0);
 
-            foreach (Border card in new[] { CpuCard, GpuCard, RamCard, FpsCard })
+            foreach (Border card in allCards)
             {
                 card.Background = CardBackgroundBrush;
                 card.BorderBrush = CardBorderBrush;
@@ -1169,7 +1384,7 @@ public partial class MainWindow : Window
 
     private void UpdateMinimalistCardSizing(bool isMinimalist)
     {
-        if (CpuCard == null || GpuCard == null || RamCard == null || FpsCard == null) return;
+        if (CpuCard == null || GpuCard == null || RamCard == null || FpsCard == null || PingCard == null) return;
 
         if (isMinimalist)
         {
@@ -1178,15 +1393,18 @@ public partial class MainWindow : Window
             GpuCard.Width = double.NaN;
             RamCard.Width = double.NaN;
             FpsCard.Width = double.NaN;
+            PingCard.Width = double.NaN;
             CpuCard.MinWidth = individual ? 120 : 0;
             GpuCard.MinWidth = individual ? 120 : 0;
             RamCard.MinWidth = individual ? 120 : 0;
             FpsCard.MinWidth = individual ? 120 : 0;
+            PingCard.MinWidth = individual ? 120 : 0;
             Thickness padding = individual ? new Thickness(12, 6, 12, 6) : new Thickness(8, 6, 8, 6);
             CpuCard.Padding = padding;
             GpuCard.Padding = padding;
             RamCard.Padding = padding;
             FpsCard.Padding = padding;
+            PingCard.Padding = padding;
             if (RamMainText != null) RamMainText.FontSize = 24;
         }
         else
@@ -1195,15 +1413,18 @@ public partial class MainWindow : Window
             GpuCard.Width = 215;
             RamCard.Width = 215;
             FpsCard.Width = 215;
+            PingCard.Width = 215;
             CpuCard.MinWidth = 0;
             GpuCard.MinWidth = 0;
             RamCard.MinWidth = 0;
             FpsCard.MinWidth = 0;
+            PingCard.MinWidth = 0;
             Thickness padding = new(12, 10, 12, 10);
             CpuCard.Padding = padding;
             GpuCard.Padding = padding;
             RamCard.Padding = padding;
             FpsCard.Padding = padding;
+            PingCard.Padding = padding;
             if (RamMainText != null) RamMainText.FontSize = 24;
         }
     }
@@ -1217,7 +1438,7 @@ public partial class MainWindow : Window
 
     private void ApplyMinimalistMode(bool isMinimalist)
     {
-        if (CpuTitleText == null || GpuTitleText == null || RamTitleText == null || FpsTitleText == null) return;
+        if (CpuTitleText == null || GpuTitleText == null || RamTitleText == null || FpsTitleText == null || PingTitleText == null) return;
 
         if (isMinimalist)
         {
@@ -1225,10 +1446,12 @@ public partial class MainWindow : Window
             GpuTitleText.Text = "GPU";
             RamTitleText.Text = "RAM";
             FpsTitleText.Text = "FPS";
+            PingTitleText.Text = "PING";
             CpuTitleText.FontSize = 24;
             GpuTitleText.FontSize = 24;
             RamTitleText.FontSize = 24;
             FpsTitleText.FontSize = 24;
+            PingTitleText.FontSize = 24;
 
             CpuNameText.Visibility = Visibility.Collapsed;
             CpuLoadText.Visibility = Visibility.Collapsed;
@@ -1238,6 +1461,8 @@ public partial class MainWindow : Window
             RamPercentText.Visibility = Visibility.Collapsed;
             FpsAppText.Visibility = Visibility.Collapsed;
             FpsFrameTimeText.Visibility = Visibility.Collapsed;
+            PingGameText.Visibility = Visibility.Collapsed;
+            PingServerText.Visibility = Visibility.Collapsed;
         }
         else
         {
@@ -1245,10 +1470,12 @@ public partial class MainWindow : Window
             GpuTitleText.Text = _gpuTitleLabel;
             RamTitleText.Text = "RAM";
             FpsTitleText.Text = "FPS (VENTANA)";
+            PingTitleText.Text = "PING (JUEGO)";
             CpuTitleText.FontSize = 11;
             GpuTitleText.FontSize = 11;
             RamTitleText.FontSize = 11;
             FpsTitleText.FontSize = 11;
+            PingTitleText.FontSize = 11;
 
             CpuNameText.Visibility = Visibility.Visible;
             CpuLoadText.Visibility = Visibility.Visible;
@@ -1258,6 +1485,8 @@ public partial class MainWindow : Window
             RamPercentText.Visibility = Visibility.Visible;
             FpsAppText.Visibility = Visibility.Visible;
             FpsFrameTimeText.Visibility = Visibility.Visible;
+            PingGameText.Visibility = Visibility.Visible;
+            PingServerText.Visibility = Visibility.Visible;
         }
 
         if (UnifiedContainer != null && _backgroundMode == "Unified")
@@ -1319,16 +1548,36 @@ public partial class MainWindow : Window
 
     private void UpdateCardMargins()
     {
-        if (GpuCard == null || RamCard == null || FpsCard == null || SpacingSlider == null) return;
+        if (CpuCard == null || GpuCard == null || RamCard == null || FpsCard == null || PingCard == null || SpacingSlider == null) return;
         double spacing = SpacingSlider.Value;
         bool isHorizontal = HorizontalLayoutMenuItem?.IsChecked == true;
         Thickness margin = isHorizontal
             ? new Thickness(spacing, 0, 0, 0)
             : new Thickness(0, spacing, 0, 0);
 
-        GpuCard.Margin = margin;
-        RamCard.Margin = margin;
-        FpsCard.Margin = margin;
+        bool seenVisible = false;
+        foreach (Border card in new[] { CpuCard, GpuCard, RamCard, FpsCard, PingCard })
+        {
+            if (card.Visibility == Visibility.Visible)
+            {
+                card.Margin = seenVisible ? margin : new Thickness(0);
+                seenVisible = true;
+            }
+            else
+            {
+                card.Margin = new Thickness(0);
+            }
+        }
+
+        if (SettingsButton != null)
+        {
+            SettingsButton.Margin = isHorizontal
+                ? new Thickness(seenVisible ? 4 : 0, 0, 0, 0)
+                : new Thickness(0, seenVisible ? 4 : 0, 0, 0);
+            SettingsButton.HorizontalAlignment = isHorizontal
+                ? HorizontalAlignment.Center
+                : HorizontalAlignment.Right;
+        }
     }
 
     // --- ORIENTACIÓN (VERTICAL / HORIZONTAL) ---
@@ -1523,6 +1772,7 @@ public partial class MainWindow : Window
         _winEventDelegate = null;
         _cts.Cancel();
         _fpsMonitor.Dispose();
+        _pingMonitor.Dispose();
         try { _computer.Close(); } catch { }
     }
 }

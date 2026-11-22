@@ -145,7 +145,7 @@
             <MenuItem x:Name="StartWithWindowsMenuItem"
                       Header="🚀 Iniciar con Windows"
                       IsCheckable="True"
-                      IsChecked="True"
+                      IsChecked="False"
                       Click="StartWithWindowsMenuItem_Click"/>
 
             <Separator/>
